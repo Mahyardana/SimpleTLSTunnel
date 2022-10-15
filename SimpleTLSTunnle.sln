@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.1.32328.378
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SimpleTLSTunnleServer", "SimpleTLSTunnleServer\SimpleTLSTunnleServer.csproj", "{BC29F5C2-1863-4EDD-B2B4-03C7139AA87C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SimpleTLSTunnleClient", "SimpleTLSTunnleClient\SimpleTLSTunnleClient.csproj", "{EB807EC9-7145-43C4-B00A-8471B36FC67F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{BC29F5C2-1863-4EDD-B2B4-03C7139AA87C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BC29F5C2-1863-4EDD-B2B4-03C7139AA87C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BC29F5C2-1863-4EDD-B2B4-03C7139AA87C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BC29F5C2-1863-4EDD-B2B4-03C7139AA87C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EB807EC9-7145-43C4-B00A-8471B36FC67F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EB807EC9-7145-43C4-B00A-8471B36FC67F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EB807EC9-7145-43C4-B00A-8471B36FC67F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EB807EC9-7145-43C4-B00A-8471B36FC67F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {683D0109-50A7-433D-BA00-B39B9453DD28}
+	EndGlobalSection
+EndGlobal
