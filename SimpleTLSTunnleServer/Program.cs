@@ -7,74 +7,24 @@ using Newtonsoft;
 using SimpleTLSTunnleServer;
 using Newtonsoft.Json;
 using System.Security.Cryptography;
+using System.Net;
+using System.Collections.Concurrent;
 
-var csp = new RNGCryptoServiceProvider();
-byte[] AESKEY = null;
-byte[] GenerateBytes(int size)
-{
-    var rnd = new byte[size];
-    csp.GetBytes(rnd);
-    return rnd;
-}
-byte[] Encrypt(byte[] data)
-{
-    SHA256 sha256 = SHA256.Create();
-    var hash = sha256.ComputeHash(data);
-    var aes = new AesGcm(AESKEY);
-    var ciphertext = new byte[data.Length];
-    byte[] nonce = GenerateBytes(12);
-    byte[] tag = new byte[16];
-    aes.Encrypt(nonce, data, ciphertext, tag);
-    var totransfer = new List<byte>();
-    totransfer.AddRange(nonce);
-    totransfer.AddRange(tag);
-    totransfer.AddRange(hash);
-    totransfer.AddRange(BitConverter.GetBytes(ciphertext.Length));
-    totransfer.AddRange(ciphertext);
-    return totransfer.ToArray();
-}
-byte[] Decrypt(byte[] ciphertext)
-{
-    try
-    {
-        SHA256 sha256 = SHA256.Create();
-        var aes = new AesGcm(AESKEY);
-        byte[] nonce = ciphertext.Take(new Range(0, 12)).ToArray();
-        byte[] tag = ciphertext.Take(new Range(12, 28)).ToArray();
-        var datahash = ciphertext.Take(new Range(28, 60)).ToArray();
-        int length = BitConverter.ToInt32(ciphertext.Take(new Range(60, 64)).ToArray());
-        var cipher = ciphertext.Take(new Range(64, 64 + length)).ToArray();
-        var data = new byte[cipher.Length];
-        aes.Decrypt(nonce, cipher, tag, data);
-        var hash = sha256.ComputeHash(data);
-        if (hash.SequenceEqual(datahash))
-            return data;
-        else
-            return new byte[0];
-    }
-    catch
-    {
-        return new byte[0];
-    }
-}
-
+object tlock = new object();
+ConcurrentQueue<TcpClient> backConnects = new ConcurrentQueue<TcpClient>();
 
 TTunnelServerConfig config = null;
 if (!File.Exists("config.json"))
 {
     config = new TTunnelServerConfig();
-    AESKEY = GenerateBytes(32);
-    var key = Convert.ToHexString(AESKEY);
-    config.Key = key;
     File.WriteAllText("config.json", JsonConvert.SerializeObject(config));
 }
 else
 {
     config = JsonConvert.DeserializeObject<TTunnelServerConfig>(File.ReadAllText("config.json"));
-    AESKEY = Convert.FromHexString(config.Key);
 }
 
-
+int connectionsRequired = 0;
 var cert = new X509Certificate("cert.pfx");
 void ClientHandler(TcpClient client)
 {
@@ -82,18 +32,54 @@ void ClientHandler(TcpClient client)
     bool encryptfornext = false;
     try
     {
-        var rbuffer = new List<byte>();
-        var sbuffer = new List<byte>();
+        var buffer = new List<byte>();
         var sw = new Stopwatch();
         sw.Start();
+        if (client == null)
+        {
+            client = new TcpClient(config.BackConnect_address, config.BackConnect_port);
+            while (client.Available <= 0)
+            {
+                Thread.Sleep(1);
+            }
+        }
+
         NetworkStream clientstream = client.GetStream();
         endpoint = clientstream.Socket.RemoteEndPoint.ToString();
-        Console.WriteLine(String.Format("Incoming Connection From: {0}", endpoint)); 
-        TcpClient nextConnection = new TcpClient(config.nextHop_address, config.nextHop_port);
-        Stream hopStream = nextConnection.GetStream();
+
+        var sslStream = new SslStream(clientstream, true, userCertificateValidationCallback);
+        sslStream.AuthenticateAsServer(cert, false, false);
+        Console.WriteLine(String.Format("Incoming Connection From: {0}", endpoint));
+
+        TcpClient nextConnection = null;
+        Stream hopStream = null;
+        if (config.BackConnectCapability && config.BackConnect_address == "127.0.0.1")
+        {
+            lock (tlock)
+            {
+                connectionsRequired++;
+            }
+            int counter = 0;
+            while (nextConnection == null)
+            {
+                if (backConnects.Count > 0)
+                    backConnects.TryDequeue(out nextConnection);
+                Thread.Sleep(1);
+                counter++;
+                if (counter >= 2000)
+                    return;
+            }
+            hopStream = nextConnection.GetStream();
+        }
+        else
+        {
+            nextConnection = new TcpClient(config.nextHop_address, config.nextHop_port);
+            hopStream = nextConnection.GetStream();
+        }
         if (config.nextHop_address != "" && config.nextHop_address != "127.0.0.1")
         {
-            encryptfornext = true;
+            hopStream = new SslStream(nextConnection.GetStream(), true, userCertificateValidationCallback);
+            ((SslStream)hopStream).AuthenticateAsClient("", null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
         }
         while (true)
         {
@@ -106,25 +92,13 @@ void ClientHandler(TcpClient client)
                     var bbbb = new byte[65536];
                     do
                     {
-                        read = clientstream.Read(bbbb, 0, bbbb.Length);
-                        rbuffer.AddRange(bbbb.Take(read));
+                        read = sslStream.Read(bbbb, 0, bbbb.Length);
+                        buffer.AddRange(bbbb.Take(read));
                     }
                     while (clientstream.DataAvailable && read != 0);
                     //Console.Write(Encoding.ASCII.GetString(buffer.ToArray()));
-                    var dec = Decrypt(rbuffer.ToArray());
-                    if (dec.Length > 0)
-                    {
-                        rbuffer.RemoveRange(0, dec.Length + 64);
-                    }
-                    if (encryptfornext)
-                    {
-                        var enc=Encrypt(dec);
-                        hopStream.Write(enc);
-                    }
-                    else
-                    {
-                        hopStream.Write(dec);
-                    }
+                    hopStream.Write(buffer.ToArray());
+                    buffer.Clear();
                 }
                 if (nextConnection.Available > 0)
                 {
@@ -133,45 +107,10 @@ void ClientHandler(TcpClient client)
                     do
                     {
                         read = hopStream.Read(bbbb, 0, bbbb.Length);
-                        sbuffer.AddRange(bbbb.Take(read));
+                        buffer.AddRange(bbbb.Take(read));
                     } while (nextConnection.Available > 0 && read != 0);
-                    if (encryptfornext)
-                    {
-                        var dec = Decrypt(sbuffer.ToArray());
-                        if (dec.Length > 0)
-                        {
-                            sbuffer.RemoveRange(0, dec.Length + 64);
-                        }
-                        var enc = Encrypt(dec);
-                        clientstream.Write(enc);
-                    }
-                    else
-                    {
-                        //if (buffer.Count > 16000)
-                        //{
-                        //    while(buffer.Count> 16000)
-                        //    {
-                        //        var enc = Encrypt(buffer.GetRange(0, 65400).ToArray());
-                        //        buffer.RemoveRange(0, 65400);
-                        //        clientstream.Write(enc);
-                        //    }
-                        //    var lastenc = Encrypt(buffer.ToArray());
-                        //    clientstream.Write(lastenc);
-                        //} 
-                        //else
-                        {
-                            var enc = Encrypt(sbuffer.ToArray());
-                            if (enc.Length > 0)
-                            {
-                                sbuffer.RemoveRange(0, enc.Length - 64);
-                            }
-                            clientstream.Write(enc);
-                        }
-                    }
-                }
-                if (rbuffer.Count > 0 || sbuffer.Count > 0)
-                {
-
+                    sslStream.Write(buffer.ToArray());
+                    buffer.Clear();
                 }
                 if (read == 0)
                 {
@@ -195,6 +134,127 @@ void ClientHandler(TcpClient client)
     client.Close();
     Console.WriteLine(String.Format("Dropped Connection From: {0}", endpoint));
 }
+void BackConnectHandler(TcpClient client)
+{
+    string endpoint = "";
+    try
+    {
+        var sw = new Stopwatch();
+        sw.Start();
+        NetworkStream clientstream = client.GetStream();
+        endpoint = clientstream.Socket.RemoteEndPoint.ToString();
+
+        var sslStream = new SslStream(clientstream, true, userCertificateValidationCallback);
+        sslStream.AuthenticateAsServer(cert, false, false);
+        Console.WriteLine(String.Format("Incoming BackConnect From: {0}", endpoint));
+        while (true)
+        {
+            try
+            {
+                var read = 0;
+                if (clientstream.DataAvailable)
+                {
+                    sw.Restart();
+                    do
+                    {
+                        read = sslStream.ReadByte();
+                    }
+                    while (clientstream.DataAvailable && read != -1);
+                }
+                while (connectionsRequired > 0)
+                {
+                    sslStream.Write(new byte[] { 0x01 });
+                    lock (tlock)
+                    {
+                        connectionsRequired--;
+                    }
+                }
+                if (sw.ElapsedMilliseconds > 1000)
+                {
+                    sw.Restart();
+                    sslStream.Write(new byte[] { 0x10 });
+                }
+                if (read == 0)
+                {
+                    Thread.Sleep(1);
+                }
+                if (!client.Connected || sw.ElapsedMilliseconds >= 1500)
+                    break;
+            }
+            catch
+            {
+
+            }
+
+        }
+    }
+    catch
+    {
+
+    }
+    client.Close();
+    Console.WriteLine(String.Format("Dropped BackConnect From: {0}", endpoint));
+}
+void BackConnectServerHandler(TcpClient client)
+{
+    SslStream sslStream = null;
+    string endpoint = "";
+    try
+    {
+        var sw = new Stopwatch();
+        sw.Start();
+        NetworkStream clientstream = client.GetStream();
+        sslStream = new SslStream(clientstream, true, userCertificateValidationCallback);
+        sslStream.AuthenticateAsClient("", null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
+        endpoint = clientstream.Socket.RemoteEndPoint.ToString();
+        Console.WriteLine(String.Format("Outgoing BackConnect To: {0}", endpoint));
+        while (true)
+        {
+            try
+            {
+                var read = 0;
+                if (clientstream.DataAvailable)
+                {
+                    sw.Restart();
+                    do
+                    {
+                        read = sslStream.ReadByte();
+                        if (read == 0x01)
+                        {
+                            Console.WriteLine("New Connection Requested");
+                            new Thread(() =>
+                            {
+                                ClientHandler(null);
+                            }).Start();
+                        }
+                        else if(read == 0x10)
+                        {
+                            Console.WriteLine("Keep Alive");
+                        }
+                    }
+                    while (clientstream.DataAvailable && read != -1);
+                }
+                if (read == 0)
+                {
+                    Thread.Sleep(1);
+                }
+                if (!client.Connected || sw.ElapsedMilliseconds >= 1500)
+                    break;
+            }
+            catch
+            {
+
+            }
+
+        }
+    }
+    catch
+    {
+
+    }
+    client.Close();
+    Console.WriteLine(String.Format("Outgoing BackConnect To: {0}", endpoint));
+}
 
 X509Certificate userCertificateSelectionCallback(object sender, string targetHost, X509CertificateCollection localCertificates, X509Certificate? remoteCertificate, string[] acceptableIssuers)
 {
@@ -208,18 +268,49 @@ bool userCertificateValidationCallback(object sender, X509Certificate? certifica
 
 var tcplistener = new TcpListener(System.Net.IPAddress.Any, config.ListeningPort);
 tcplistener.Start();
-if (config.nextHop_address == "" || config.nextHop_address == "127.0.0.1")
+if (config.nextHop_address == "127.0.0.1")
 {
     var socksServer = new Socks5.Servers.SimpleSocks5Server(new System.Net.IPEndPoint(System.Net.IPAddress.Any, config.nextHop_port));
     socksServer.StartAsync();
 }
+TcpListener backtcplistener = null;
+TcpClient backtcpclient = null;
+if (config.BackConnectCapability && config.BackConnect_address == "127.0.0.1")
+{
+    backtcplistener = new TcpListener(System.Net.IPAddress.Any, config.BackConnectManager_port);
+    backtcplistener.Start();
+}
+
 while (true)
 {
     if (tcplistener.Pending())
     {
+        var client = tcplistener.AcceptTcpClient();
+        if (client.Client.RemoteEndPoint.ToString().Contains(config.nextHop_address))
+        {
+            backConnects.Enqueue(client);
+        }
+        else
+        {
+            new Thread(() =>
+            {
+                ClientHandler(client);
+            }).Start();
+        }
+    }
+    if (backtcplistener != null && backtcplistener.Pending())
+    {
         new Thread(() =>
         {
-            ClientHandler(tcplistener.AcceptTcpClient());
+            BackConnectHandler(backtcplistener.AcceptTcpClient());
+        }).Start();
+    }
+    if (config.BackConnectCapability && config.BackConnect_address != "127.0.0.1" && (backtcpclient == null || !backtcpclient.Connected))
+    {
+        backtcpclient = new TcpClient(config.BackConnect_address, config.BackConnectManager_port);
+        new Thread(() =>
+        {
+            BackConnectServerHandler(backtcpclient);
         }).Start();
     }
     Thread.Sleep(100);
