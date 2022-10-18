@@ -307,11 +307,18 @@ while (true)
     }
     if (config.BackConnectCapability && config.BackConnect_address != "127.0.0.1" && (backtcpclient == null || !backtcpclient.Connected))
     {
-        backtcpclient = new TcpClient(config.BackConnect_address, config.BackConnectManager_port);
-        new Thread(() =>
+        try
         {
-            BackConnectServerHandler(backtcpclient);
-        }).Start();
+            backtcpclient = new TcpClient(config.BackConnect_address, config.BackConnectManager_port);
+            new Thread(() =>
+            {
+                BackConnectServerHandler(backtcpclient);
+            }).Start();
+        }
+        catch
+        {
+            Console.WriteLine(String.Format("BackConnect Failed!"));
+        }
     }
     Thread.Sleep(100);
 }
