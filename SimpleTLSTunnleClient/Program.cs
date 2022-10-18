@@ -94,12 +94,12 @@ void ClientHandler(TcpClient client)
 
         encryptedStream.Close();
         tcptunnle.Close();
+        client.Close();
     }
     catch
     {
 
     }
-    client.Close();
 
     Console.WriteLine(String.Format("Dropped Connection From: {0}", endpoint));
 }

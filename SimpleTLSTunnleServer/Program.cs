@@ -126,12 +126,12 @@ void ClientHandler(TcpClient client)
 
         }
         nextConnection.Close();
+        client.Close();
     }
     catch
     {
 
     }
-    client.Close();
     Console.WriteLine(String.Format("Dropped Connection From: {0}", endpoint));
 }
 void BackConnectHandler(TcpClient client)
@@ -187,12 +187,12 @@ void BackConnectHandler(TcpClient client)
             }
 
         }
+        client.Close();
     }
     catch
     {
 
     }
-    client.Close();
     Console.WriteLine(String.Format("Dropped BackConnect From: {0}", endpoint));
 }
 void BackConnectServerHandler(TcpClient client)
@@ -227,7 +227,7 @@ void BackConnectServerHandler(TcpClient client)
                                 ClientHandler(null);
                             }).Start();
                         }
-                        else if(read == 0x10)
+                        else if (read == 0x10)
                         {
                             Console.WriteLine("Keep Alive");
                         }
@@ -247,12 +247,12 @@ void BackConnectServerHandler(TcpClient client)
             }
 
         }
+        client.Close();
     }
     catch
     {
 
     }
-    client.Close();
     Console.WriteLine(String.Format("Outgoing BackConnect To: {0}", endpoint));
 }
 
