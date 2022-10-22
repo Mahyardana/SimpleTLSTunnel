@@ -8,12 +8,14 @@ using SimpleTLSTunnelClient;
 using System.Security.Cryptography;
 using System.Reflection.Metadata.Ecma335;
 using System.Collections.Concurrent;
+using System.Drawing.Drawing2D;
+
 object tlock = new object();
 ulong lastSessionID = 0;
 var stableTunnelsCount = 0;
-var maxStableTunnelsCount = 16;
+var maxStableTunnelsCount = 1;
 ConcurrentQueue<TunnelSession> senderqueue = new ConcurrentQueue<TunnelSession>();
-Dictionary<ulong, Dictionary<ulong, byte[]>> responsesDict = new Dictionary<ulong, Dictionary<ulong, byte[]>>();
+Dictionary<ulong, Dictionary<ulong, Packet>> responsesDict = new Dictionary<ulong, Dictionary<ulong, Packet>>();
 TTunnelClientConfig config = null;
 if (!File.Exists("config.json"))
 {
@@ -41,10 +43,14 @@ void StableTunnelHandler()
 {
     try
     {
+        var tunnelsw = new Stopwatch();
+        tunnelsw.Start();
         var sw = new Stopwatch();
         sw.Start();
         stableTunnelsCount++;
         var client = new TcpClient(config.server_address, config.server_port);
+        client.ReceiveTimeout = 30000;
+        client.SendTimeout = 30000;
         NetworkStream tcptunnel = client.GetStream();
         var encryptedStream = new SslStream(tcptunnel, true, userCertificateValidationCallback, userCertificateSelectionCallback);
 
@@ -54,7 +60,15 @@ void StableTunnelHandler()
         {
             try
             {
-                if (!client.Connected)
+                lock (tlock)
+                {
+                    while (senderqueue.Count > 0 && (DateTime.Now - senderqueue.FirstOrDefault().ts).TotalSeconds > 30)
+                    {
+                        TunnelSession tunnelSession = null;
+                        senderqueue.TryDequeue(out tunnelSession);
+                    }
+                }
+                if (!client.Connected || sw.ElapsedMilliseconds > 30000)
                 {
                     break;
                 }
@@ -90,7 +104,7 @@ void StableTunnelHandler()
                         }
                         if (responsesDict.ContainsKey(sessionid))
                         {
-                            responsesDict[sessionid].Add(order, data.ToArray());
+                            responsesDict[sessionid].Add(order, new Packet() { data = data.ToArray(), ts = DateTime.Now });
                         }
                         data.Clear();
                     }
@@ -100,7 +114,7 @@ void StableTunnelHandler()
                     if (senderqueue.Count > 0)
                     {
                         sw.Restart();
-                        TunnelSession tunnelSession;
+                        TunnelSession tunnelSession = null;
                         senderqueue.TryDequeue(out tunnelSession);
                         var sessionidbytes = BitConverter.GetBytes(tunnelSession.ID);
                         var orderbytes = BitConverter.GetBytes(tunnelSession.order);
@@ -159,14 +173,14 @@ void ClientHandler(TcpClient client)
         Console.WriteLine(String.Format("Incoming Connection From: {0}", endpoint));
         bool sfirst = true, rfirst = true;
         var pinger = new Stopwatch();
-        responsesDict.Add(currentID, new Dictionary<ulong, byte[]>());
+        responsesDict.Add(currentID, new Dictionary<ulong, Packet>());
         var sw = new Stopwatch();
         sw.Start();
         while (true)
         {
             try
             {
-                if (!client.Connected)
+                if (!client.Connected || sw.ElapsedMilliseconds > 10000)
                     break;
                 var read = 0;
                 if (clientstream.DataAvailable)
@@ -180,7 +194,7 @@ void ClientHandler(TcpClient client)
                     }
                     //while (clientstream.DataAvailable && read != 0);
                     //encryptedStream.Write(buffer.ToArray());
-                    senderqueue.Enqueue(new TunnelSession() { ID = currentID, Data = buffer.ToArray(), order = writeorder });
+                    senderqueue.Enqueue(new TunnelSession() { ID = currentID, Data = buffer.ToArray(), order = writeorder, ts = DateTime.Now });
                     writeorder++;
                     buffer.Clear();
                     if (sfirst)
@@ -191,11 +205,10 @@ void ClientHandler(TcpClient client)
                 }
                 lock (tlock)
                 {
-
                     if (responsesDict[currentID].Count > 0 && responsesDict[currentID].ContainsKey(readorder))
                     {
                         sw.Restart();
-                        byte[] bbbb = responsesDict[currentID][readorder];
+                        byte[] bbbb = responsesDict[currentID][readorder].data;
                         //do
                         //{
                         //    read = encryptedStream.Read(bbbb, 0, bbbb.Length);

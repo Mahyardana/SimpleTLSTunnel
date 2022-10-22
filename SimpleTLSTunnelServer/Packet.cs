@@ -6,12 +6,9 @@ using System.Threading.Tasks;
 
 namespace SimpleTLSTunnelServer
 {
-    internal class TunnelSession
+    internal class Packet
     {
-        public ulong ID;
-        public ulong order;
-        public string IP;
-        public byte[] Data;
+        public byte[] data;
         public DateTime ts;
     }
 }
