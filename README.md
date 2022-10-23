@@ -32,6 +32,7 @@ Both Client And Server Use config.json file as configuration
 Client Side config.json
 ```
 {
+  "stable_tunnel": 1,
   "server_address": "SERVER_IP",
   "server_port": SERVER_LISTENER_PORT,
   "proxy_listening_port": PROXY_LISTENER_PORT
@@ -46,6 +47,7 @@ proxy_listening_port is a port which program uses to get socks5 packets in clien
 Server Side config.json
 ```
 {
+  "stable_tunnel": 16,
   "nextHop_address": "127.0.0.1",
   "nextHop_port": 8080,
   "ListeningPort": 443,
@@ -76,6 +78,7 @@ we config client and servers like this:
 Client Side config.json
 ```
 {
+  "stable_tunnel": 1,
   "server_address": "10.10.10.2",
   "server_port": 443,
   "proxy_listening_port": 1080
@@ -85,6 +88,7 @@ Client Side config.json
 Server1 (Edge) config.json
 ```
 {
+  "stable_tunnel": 16,
   "nextHop_address": "10.10.10.3",
   "nextHop_port": 443,
   "ListeningPort": 443,
@@ -98,6 +102,7 @@ Server1 (Edge) config.json
 Server2 (Destination) config.json
 ```
 {
+  "stable_tunnel": 16,
   "nextHop_address": "127.0.0.1",
   "nextHop_port": 8080,
   "ListeningPort": 443,
@@ -123,6 +128,7 @@ we config client and servers like this
 Client Side config.json
 ```
 {
+  "stable_tunnel": 1,
   "server_address": "10.10.10.2",
   "server_port": 443,
   "proxy_listening_port": 1080
@@ -132,6 +138,7 @@ Client Side config.json
 Server1 (Edge) config.json
 ```
 {
+  "stable_tunnel": 16,
   "nextHop_address": "10.10.10.3",
   "nextHop_port": 443,
   "ListeningPort": 443,
@@ -145,6 +152,7 @@ Server1 (Edge) config.json
 Server2 (Destination) config.json
 ```
 {
+  "stable_tunnel": 16,
   "nextHop_address": "127.0.0.1",
   "nextHop_port": 8080,
   "ListeningPort": 443,
