@@ -8,6 +8,7 @@ namespace SimpleTLSTunnelServer
 {
     public class TTunnelServerConfig
     {
+        public int stable_tunnels = 32;
         public string nextHop_address = "127.0.0.1";
         public int nextHop_port = 8080;
         public int ListeningPort = 443;

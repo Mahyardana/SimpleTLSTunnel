@@ -13,5 +13,7 @@ namespace SimpleTLSTunnelServer
         public string IP;
         public byte[] Data;
         public DateTime ts;
+        public bool close=false;
+        public bool ack=false;
     }
 }

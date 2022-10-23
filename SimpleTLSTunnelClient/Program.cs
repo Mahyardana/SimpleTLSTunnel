@@ -13,7 +13,7 @@ using System.Drawing.Drawing2D;
 object tlock = new object();
 ulong lastSessionID = 0;
 var stableTunnelsCount = 0;
-var maxStableTunnelsCount = 1;
+var maxStableTunnelsCount = 16;
 ConcurrentQueue<TunnelSession> senderqueue = new ConcurrentQueue<TunnelSession>();
 Dictionary<ulong, Dictionary<ulong, Packet>> responsesDict = new Dictionary<ulong, Dictionary<ulong, Packet>>();
 TTunnelClientConfig config = null;
@@ -25,6 +25,7 @@ if (!File.Exists("config.json"))
 else
 {
     config = JsonConvert.DeserializeObject<TTunnelClientConfig>(File.ReadAllText("config.json"));
+    maxStableTunnelsCount = config.stable_tunnels;
 }
 //var encrypted=Encrypt(Encoding.ASCII.GetBytes("fuckme"));
 //var decrypted=Decrypt(encrypted);
@@ -82,15 +83,15 @@ void StableTunnelHandler()
                         var orderbytes = new byte[8];
                         var lengthbytes = new byte[4];
                         var iplengthbytes = new byte[4];
-                        encryptedStream.Read(sessionidbytes);
-                        var sessionid = BitConverter.ToUInt64(sessionidbytes);
-                        encryptedStream.Read(orderbytes);
-                        var order = BitConverter.ToUInt64(orderbytes);
                         encryptedStream.Read(iplengthbytes);
                         var iplength = BitConverter.ToInt32(iplengthbytes);
                         var ipbytes = new byte[iplength];
                         encryptedStream.Read(ipbytes);
                         var ip = Encoding.ASCII.GetString(ipbytes);
+                        encryptedStream.Read(sessionidbytes);
+                        var sessionid = BitConverter.ToUInt64(sessionidbytes);
+                        encryptedStream.Read(orderbytes);
+                        var order = BitConverter.ToUInt64(orderbytes);
                         encryptedStream.Read(lengthbytes);
                         var length = BitConverter.ToInt32(lengthbytes);
                         var buffer = new byte[65536];
@@ -117,18 +118,43 @@ void StableTunnelHandler()
                         TunnelSession tunnelSession = null;
                         senderqueue.TryDequeue(out tunnelSession);
                         var sessionidbytes = BitConverter.GetBytes(tunnelSession.ID);
-                        var orderbytes = BitConverter.GetBytes(tunnelSession.order);
-                        var lengthbytes = BitConverter.GetBytes(tunnelSession.Data.Length);
-                        var data = new List<byte>();
-                        data.Add(0x02);
-                        data.AddRange(sessionidbytes);
-                        data.AddRange(orderbytes);
-                        data.AddRange(BitConverter.GetBytes(0));
-                        data.AddRange(lengthbytes);
-                        data.AddRange(tunnelSession.Data);
-                        encryptedStream.Write(data.ToArray());
-                        encryptedStream.Flush();
-                        data.Clear();
+                        if (tunnelSession.close)
+                        {
+                            var data = new List<byte>();
+                            data.Add(0x03);
+                            data.AddRange(BitConverter.GetBytes(0));
+                            data.AddRange(sessionidbytes);
+                            encryptedStream.Write(data.ToArray());
+                            encryptedStream.Flush();
+                            data.Clear();
+                        }
+                        else if (tunnelSession.ack)
+                        {
+                            var data = new List<byte>();
+                            var orderbytes = BitConverter.GetBytes(tunnelSession.order);
+                            data.Add(0x04);
+                            data.AddRange(BitConverter.GetBytes(0));
+                            data.AddRange(sessionidbytes);
+                            data.AddRange(orderbytes);
+                            encryptedStream.Write(data.ToArray());
+                            encryptedStream.Flush();
+                            data.Clear();
+                        }
+                        else
+                        {
+                            var orderbytes = BitConverter.GetBytes(tunnelSession.order);
+                            var lengthbytes = BitConverter.GetBytes(tunnelSession.Data.Length);
+                            var data = new List<byte>();
+                            data.Add(0x02);
+                            data.AddRange(BitConverter.GetBytes(0));
+                            data.AddRange(sessionidbytes);
+                            data.AddRange(orderbytes);
+                            data.AddRange(lengthbytes);
+                            data.AddRange(tunnelSession.Data);
+                            encryptedStream.Write(data.ToArray());
+                            encryptedStream.Flush();
+                            data.Clear();
+                        }
                     }
                 }
                 if (sw.ElapsedMilliseconds > 1000)
@@ -170,7 +196,7 @@ void ClientHandler(TcpClient client)
         var buffer = new List<byte>();
         NetworkStream clientstream = client.GetStream();
         endpoint = clientstream.Socket.RemoteEndPoint.ToString();
-        Console.WriteLine(String.Format("Incoming Connection From: {0}", endpoint));
+        //Console.WriteLine(String.Format("Incoming Connection From: {0}", endpoint));
         bool sfirst = true, rfirst = true;
         var pinger = new Stopwatch();
         responsesDict.Add(currentID, new Dictionary<ulong, Packet>());
@@ -180,7 +206,7 @@ void ClientHandler(TcpClient client)
         {
             try
             {
-                if (!client.Connected || sw.ElapsedMilliseconds > 10000)
+                if (!client.Connected || sw.ElapsedMilliseconds > 30000)
                     break;
                 var read = 0;
                 if (clientstream.DataAvailable)
@@ -209,6 +235,7 @@ void ClientHandler(TcpClient client)
                     {
                         sw.Restart();
                         byte[] bbbb = responsesDict[currentID][readorder].data;
+                        responsesDict[currentID].Remove(readorder);
                         //do
                         //{
                         //    read = encryptedStream.Read(bbbb, 0, bbbb.Length);
@@ -216,7 +243,10 @@ void ClientHandler(TcpClient client)
                         //} while (tcptunnel.DataAvailable && read != 0);
                         clientstream.Write(bbbb);
                         clientstream.Flush();
+
                         readorder++;
+                        senderqueue.Enqueue(new TunnelSession() { ID = currentID, ts = DateTime.Now, ack = true, order = writeorder });
+                        writeorder++;
                         //Console.Write(Encoding.ASCII.GetString(buffer.ToArray()));
                         buffer.Clear();
                         if (rfirst)
@@ -240,6 +270,7 @@ void ClientHandler(TcpClient client)
         }
 
 
+        senderqueue.Enqueue(new TunnelSession() { ID = currentID, ts = DateTime.Now, close = true });
         //encryptedStream.Close();
         //tcptunnel.Close();
         client.Close();
@@ -249,7 +280,7 @@ void ClientHandler(TcpClient client)
 
     }
     responsesDict.Remove(currentID);
-    Console.WriteLine(String.Format("Dropped Connection From: {0}", endpoint));
+    //Console.WriteLine(String.Format("Dropped Connection From: {0}", endpoint));
 }
 
 X509Certificate userCertificateSelectionCallback(object sender, string targetHost, X509CertificateCollection localCertificates, X509Certificate? remoteCertificate, string[] acceptableIssuers)

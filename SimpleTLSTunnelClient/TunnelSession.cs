@@ -12,5 +12,7 @@ namespace SimpleTLSTunnelClient
         public ulong order;
         public byte[] Data;
         public DateTime ts;
+        public bool close = false;
+        public bool ack = false;
     }
 }
