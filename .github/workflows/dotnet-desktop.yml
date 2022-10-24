@@ -57,8 +57,6 @@ jobs:
 
     env:
       Solution_Name: SimpleTLSTunnel.sln                         # Replace with your solution name, i.e. MyWpfApp.sln.
-      Wap_Project_Directory: MyWapApp.Package    # Replace with the Wap project directory relative to the solution, i.e. MyWpfApp.Package.
-      Wap_Project_Path: MyWap.App.Package\MyWapApp.Package.wapproj                   # Replace with the path to your Wap project, i.e. MyWpf.App.Package\MyWpfApp.Package.wapproj.
 
     steps:
     - name: Checkout
