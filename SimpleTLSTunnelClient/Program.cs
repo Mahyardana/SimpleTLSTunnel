@@ -9,7 +9,64 @@ using System.Security.Cryptography;
 using System.Reflection.Metadata.Ecma335;
 using System.Collections.Concurrent;
 using System.Drawing.Drawing2D;
+using UniversalTunTapDriver;
+using System.Net;
+using System.Net.NetworkInformation;
+#pragma warning disable CS8603 
+#pragma warning disable CS8602
+#pragma warning disable CS8600 
+var foundtundevice = false;
+var taps = TunTapHelper_windows.GetTapGuidList("tap0901");
+TunTapDevice tundevice = null;
+foreach (var tap in taps)
+{
+    tundevice = new TunTapDevice(tap);
+    if (tundevice.Name == "SimpleTLSTunnel")
+    {
+        foundtundevice = true;
+        break;
+    }
+}
+if (!foundtundevice)
+{
+    var tapinfo = new TunTapHelper.TunTapDeviceInfo();
+    tapinfo.Name = "SimpleTLSTunnel";
+    tapinfo.Guid = "{" + Guid.NewGuid().ToString().ToUpper() + "}";
+    tundevice = new TunTapDevice(tapinfo);
+}
+var version = tundevice.GetVersion();
+tundevice.SetConnectionState(TunTapHelper.ConnectionStatus.Connected);
+var streamcreated = tundevice.CreateDeviceIOStream(1500);
+var stream = tundevice.TunTapDeviceIOStream;
+var str = "";
+while (true)
+{
+    while(true)
+    {
 
+        var b = stream.ReadByte();
+        str += Convert.ToChar(b);
+        if (b == 0)
+            break;
+    }
+
+    Console.WriteLine(str);
+    str = "";
+}
+tundevice.ConfigTun(IPAddress.Parse("10.1.1.10"), IPAddress.Parse("10.1.1.1"), IPAddress.Parse("255.255.255.0"));
+IPAddress GetDefaultGateway()
+{
+    return NetworkInterface.GetAllNetworkInterfaces()
+        .Where(n => n.OperationalStatus == OperationalStatus.Up)
+        .Where(n => n.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+        .SelectMany(n => n.GetIPProperties()?.GatewayAddresses)
+        .Select(g => g?.Address)
+        .Where(a => a != null)
+        // .Where(a => a.AddressFamily == AddressFamily.InterNetwork)
+        // .Where(a => Array.FindIndex(a.GetAddressBytes(), b => b != 0) >= 0)
+        .FirstOrDefault();
+}
+var dg = GetDefaultGateway();
 object tlock = new object();
 ulong lastSessionID = 0;
 var stableTunnelsCount = 0;
@@ -44,18 +101,21 @@ void StableTunnelHandler()
 {
     try
     {
-        var tunnelsw = new Stopwatch();
-        tunnelsw.Start();
+        var keepalivesw = new Stopwatch();
+        keepalivesw.Start();
         var sw = new Stopwatch();
         sw.Start();
-        stableTunnelsCount++;
         var client = new TcpClient(config.server_address, config.server_port);
         client.ReceiveTimeout = 30000;
         client.SendTimeout = 30000;
         NetworkStream tcptunnel = client.GetStream();
         var encryptedStream = new SslStream(tcptunnel, true, userCertificateValidationCallback, userCertificateSelectionCallback);
 
+        //var bytes = new byte[64];
+        //new Random().NextBytes(bytes);
+        //tcptunnel.Write(bytes);
         encryptedStream.AuthenticateAsClient("", null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
+        encryptedStream.WriteByte(0x00);
         encryptedStream.Flush();
         while (true)
         {
@@ -97,15 +157,18 @@ void StableTunnelHandler()
                         var buffer = new byte[65536];
                         var data = new List<byte>();
                         var totalread = 0;
-                        while (totalread < length)
+                        lock (tlock)
                         {
-                            var read = encryptedStream.Read(buffer, 0, length - totalread > buffer.Length ? buffer.Length : length - totalread);
-                            data.AddRange(buffer.Take(read));
-                            totalread += read;
-                        }
-                        if (responsesDict.ContainsKey(sessionid))
-                        {
-                            responsesDict[sessionid].Add(order, new Packet() { data = data.ToArray(), ts = DateTime.Now });
+                            while (totalread < length)
+                            {
+                                var read = encryptedStream.Read(buffer, 0, length - totalread > buffer.Length ? buffer.Length : length - totalread);
+                                data.AddRange(buffer.Take(read));
+                                totalread += read;
+                            }
+                            if (responsesDict.ContainsKey(sessionid))
+                            {
+                                responsesDict[sessionid].Add(order, new Packet() { data = data.ToArray(), ts = DateTime.Now });
+                            }
                         }
                         data.Clear();
                     }
@@ -114,7 +177,6 @@ void StableTunnelHandler()
                 {
                     if (senderqueue.Count > 0)
                     {
-                        sw.Restart();
                         TunnelSession tunnelSession = null;
                         senderqueue.TryDequeue(out tunnelSession);
                         var sessionidbytes = BitConverter.GetBytes(tunnelSession.ID);
@@ -157,9 +219,9 @@ void StableTunnelHandler()
                         }
                     }
                 }
-                if (sw.ElapsedMilliseconds > 1000)
+                if (keepalivesw.ElapsedMilliseconds > 10000)
                 {
-                    sw.Restart();
+                    keepalivesw.Restart();
                     encryptedStream.Write(new byte[] { 0x10 });
                     encryptedStream.Flush();
                 }
@@ -220,7 +282,10 @@ void ClientHandler(TcpClient client)
                     }
                     //while (clientstream.DataAvailable && read != 0);
                     //encryptedStream.Write(buffer.ToArray());
-                    senderqueue.Enqueue(new TunnelSession() { ID = currentID, Data = buffer.ToArray(), order = writeorder, ts = DateTime.Now });
+                    lock (tlock)
+                    {
+                        senderqueue.Enqueue(new TunnelSession() { ID = currentID, Data = buffer.ToArray(), order = writeorder, ts = DateTime.Now });
+                    }
                     writeorder++;
                     buffer.Clear();
                     if (sfirst)
@@ -303,6 +368,7 @@ while (true)
     {
         try
         {
+            stableTunnelsCount++;
             new Thread(() =>
             {
                 StableTunnelHandler();

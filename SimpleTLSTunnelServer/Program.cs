@@ -9,8 +9,11 @@ using Newtonsoft.Json;
 using System.Security.Cryptography;
 using System.Net;
 using System.Collections.Concurrent;
-
-object tlock = new object();
+#pragma warning disable CS8603 
+#pragma warning disable CS8602
+#pragma warning disable CS8600 
+ThreadPool.SetMaxThreads(1000, 1000);
+//object tlock = new object();
 object ttlock = new object();
 ConcurrentQueue<TcpClient> backConnects = new ConcurrentQueue<TcpClient>();
 
@@ -38,16 +41,19 @@ void StableTunnelHandler(TcpClient client)
     string endpoint = "";
     try
     {
-        var tunnelsw = new Stopwatch();
-        tunnelsw.Start();
+        var keepalivesw = new Stopwatch();
+        keepalivesw.Start();
         bool lastserver = false;
         var sw = new Stopwatch();
         sw.Start();
         NetworkStream tcptunnel = client.GetStream();
-        client.ReceiveTimeout = 30000;
-        client.SendTimeout = 30000;
+        client.ReceiveTimeout = 10000;
+        client.SendTimeout = 10000;
         endpoint = tcptunnel.Socket.RemoteEndPoint.ToString();
         var IP = Convert.ToHexString(SHA1.HashData(Encoding.ASCII.GetBytes(endpoint.Substring(0, endpoint.IndexOf(':')))));
+        //var tcpbytes = new byte[64];
+        //tcptunnel.Read(tcpbytes, 0, tcpbytes.Length);
+        //Console.WriteLine(Convert.ToHexString(tcpbytes));
         SslStream encryptedStream = new SslStream(tcptunnel, true, userCertificateValidationCallback, userCertificateSelectionCallback);
         if (!endpoint.Contains(config.nextHop_address))
         {
@@ -64,29 +70,35 @@ void StableTunnelHandler(TcpClient client)
         else
             lastserver = false;
         Console.WriteLine(String.Format("Stable Tunnel Connection From: {0}", endpoint));
-        encryptedStream.WriteByte(0x00);
+        encryptedStream.WriteByte(0x00); 
+        byte[] towrite = null;
         while (true)
         {
             try
             {
                 if (!client.Connected || sw.ElapsedMilliseconds > 30000)
                     break;
+                if (towrite != null)
+                {
+                    encryptedStream.Write(towrite);
+                    encryptedStream.Flush();
+                }
+                lock (ttlock)
+                {
+                    while (senderqueue.Count > 0 && (DateTime.Now - senderqueue.FirstOrDefault().ts).TotalSeconds > 30)
+                    {
+                        TunnelSession tunnelSession = null;
+                        senderqueue.TryDequeue(out tunnelSession);
+                    }
+
+                    while (nexthopqueue.Count > 0 && (DateTime.Now - nexthopqueue.FirstOrDefault().ts).TotalSeconds > 30)
+                    {
+                        TunnelSession tunnelSession = null;
+                        nexthopqueue.TryDequeue(out tunnelSession);
+                    }
+                }
                 if (tcptunnel.DataAvailable)
                 {
-                    lock (ttlock)
-                    {
-                        while (senderqueue.Count > 0 && (DateTime.Now - senderqueue.FirstOrDefault().ts).TotalSeconds > 30)
-                        {
-                            TunnelSession tunnelSession = null;
-                            senderqueue.TryDequeue(out tunnelSession);
-                        }
-
-                        while (nexthopqueue.Count > 0 && (DateTime.Now - nexthopqueue.FirstOrDefault().ts).TotalSeconds > 30)
-                        {
-                            TunnelSession tunnelSession = null;
-                            nexthopqueue.TryDequeue(out tunnelSession);
-                        }
-                    }
                     sw.Restart();
                     var type = encryptedStream.ReadByte();
                     if (type == 0x02)
@@ -133,14 +145,28 @@ void StableTunnelHandler(TcpClient client)
                             {
                                 if (!responsesDict[ip].ContainsKey(sessionid))
                                 {
-                                    responsesDict[ip].Add(sessionid, new Dictionary<ulong, Packet>());
+                                    try
+                                    {
+                                        responsesDict[ip].Add(sessionid, new Dictionary<ulong, Packet>());
+                                    }
+                                    catch
+                                    {
+
+                                    }
                                     new Thread(() =>
                                     {
                                         ClientHandler(null, sessionid, ip);
                                     }).Start();
                                 }
+                                try
+                                {
+                                    responsesDict[ip][sessionid].Add(order, new Packet() { data = data.ToArray(), ts = DateTime.Now });
+                                }
+                                catch
+                                {
+
+                                }
                             }
-                            responsesDict[ip][sessionid].Add(order, new Packet() { data = data.ToArray(), ts = DateTime.Now });
                         }
                         //else if (!tonext && !lastserver)
                         //{
@@ -157,9 +183,11 @@ void StableTunnelHandler(TcpClient client)
                         {
                             //Console.WriteLine(ip);
                             if (endpoint.Contains(config.nextHop_address))
-                                senderqueue.Enqueue(new TunnelSession() { Data = data.ToArray(), ID = sessionid, order = order, IP = ip, ts = DateTime.Now });
+                                lock (ttlock)
+                                    senderqueue.Enqueue(new TunnelSession() { Data = data.ToArray(), ID = sessionid, order = order, IP = ip, ts = DateTime.Now });
                             else
-                                nexthopqueue.Enqueue(new TunnelSession() { Data = data.ToArray(), ID = sessionid, order = order, IP = ip, ts = DateTime.Now });
+                                lock (ttlock)
+                                    nexthopqueue.Enqueue(new TunnelSession() { Data = data.ToArray(), ID = sessionid, order = order, IP = ip, ts = DateTime.Now });
                         }
                         data.Clear();
                     }
@@ -183,11 +211,41 @@ void StableTunnelHandler(TcpClient client)
                         }
                         if (!lastserver)
                         {
-                            nexthopqueue.Enqueue(new TunnelSession() { ID = sessionid, IP = ip, ts = DateTime.Now, close = true });
+                            lock (ttlock)
+                                nexthopqueue.Enqueue(new TunnelSession() { ID = sessionid, IP = ip, ts = DateTime.Now, close = true });
                         }
                         try
                         {
-                            responsesDict[ip].Remove(sessionid);
+                            lock (ttlock)
+                            {
+                                for (int i = 0; i < senderqueue.Count; i++)
+                                {
+                                    TunnelSession tunnelSession = null;
+                                    senderqueue.TryDequeue(out tunnelSession);
+                                    if (tunnelSession.IP != ip || tunnelSession.ID != sessionid)
+                                    {
+                                        senderqueue.Enqueue(tunnelSession);
+                                    }
+                                }
+
+                                for (int i = 0; i < nexthopqueue.Count; i++)
+                                {
+                                    TunnelSession tunnelSession = null;
+                                    nexthopqueue.TryDequeue(out tunnelSession);
+                                    if (tunnelSession.IP != ip || tunnelSession.ID != sessionid)
+                                    {
+                                        nexthopqueue.Enqueue(tunnelSession);
+                                    }
+                                }
+                                try
+                                {
+                                    responsesDict[ip].Remove(sessionid);
+                                }
+                                catch
+                                {
+
+                                }
+                            }
                         }
                         catch
                         {
@@ -217,19 +275,32 @@ void StableTunnelHandler(TcpClient client)
                         }
                         if (!lastserver)
                         {
-                            nexthopqueue.Enqueue(new TunnelSession() { ID = sessionid, IP = ip, ts = DateTime.Now, ack = true, order = order });
+                            lock (ttlock)
+                                nexthopqueue.Enqueue(new TunnelSession() { ID = sessionid, IP = ip, ts = DateTime.Now, ack = true, order = order });
                         }
                         else
                         {
-                            responsesDict[ip][sessionid].Add(order, new Packet() { data = new byte[] { 0x04 }, ts = DateTime.Now });
+                            try
+                            {
+                                lock (ttlock)
+                                    responsesDict[ip][sessionid].Add(order, new Packet() { data = new byte[] { 0x04 }, ts = DateTime.Now });
+                            }
+                            catch
+                            {
+
+                            }
                         }
                     }
+                    else if(type==0x10)
+                    {
+                        Console.WriteLine("Keep-Alive");
+                    }
                 }
+                towrite = null;
                 lock (ttlock)
                 {
                     if (nexthopqueue.Count > 0 && endpoint.Contains(config.nextHop_address))
                     {
-                        sw.Restart();
                         TunnelSession tunnelSession = null;
                         nexthopqueue.TryDequeue(out tunnelSession);
                         var ipbytes = Encoding.ASCII.GetBytes(tunnelSession.IP);
@@ -243,8 +314,7 @@ void StableTunnelHandler(TcpClient client)
                             data.AddRange(iplengthbytes);
                             data.AddRange(ipbytes);
                             data.AddRange(sessionidbytes);
-                            encryptedStream.Write(data.ToArray());
-                            encryptedStream.Flush();
+                            towrite = data.ToArray();
                             data.Clear();
                         }
                         else if (tunnelSession.ack)
@@ -257,8 +327,7 @@ void StableTunnelHandler(TcpClient client)
                             data.AddRange(ipbytes);
                             data.AddRange(sessionidbytes);
                             data.AddRange(orderbytes);
-                            encryptedStream.Write(data.ToArray());
-                            encryptedStream.Flush();
+                            towrite = data.ToArray();
                             data.Clear();
                         }
                         else
@@ -275,14 +344,21 @@ void StableTunnelHandler(TcpClient client)
                             data.AddRange(orderbytes);
                             data.AddRange(lengthbytes);
                             data.AddRange(tunnelSession.Data);
-                            encryptedStream.Write(data.ToArray());
-                            encryptedStream.Flush();
+                            towrite = data.ToArray();
                             data.Clear();
                         }
                     }
+                }
+                if (towrite != null)
+                {
+                    encryptedStream.Write(towrite);
+                    encryptedStream.Flush();
+                }
+                towrite = null;
+                lock (ttlock)
+                {
                     if (senderqueue.Count > 0 && senderqueue.FirstOrDefault().IP.Contains(IP) && !endpoint.Contains(config.nextHop_address))
                     {
-                        sw.Restart();
                         TunnelSession tunnelSession = null;
                         senderqueue.TryDequeue(out tunnelSession);
                         var sessionidbytes = BitConverter.GetBytes(tunnelSession.ID);
@@ -295,8 +371,7 @@ void StableTunnelHandler(TcpClient client)
                             data.AddRange(sessionidbytes);
                             data.AddRange(iplengthbytes);
                             data.AddRange(ipbytes);
-                            encryptedStream.Write(data.ToArray());
-                            encryptedStream.Flush();
+                            towrite = data.ToArray();
                             data.Clear();
                         }
                         else if (tunnelSession.ack)
@@ -309,8 +384,7 @@ void StableTunnelHandler(TcpClient client)
                             data.AddRange(ipbytes);
                             data.AddRange(sessionidbytes);
                             data.AddRange(orderbytes);
-                            encryptedStream.Write(data.ToArray());
-                            encryptedStream.Flush();
+                            towrite = data.ToArray();
                             data.Clear();
                         }
                         else
@@ -327,19 +401,23 @@ void StableTunnelHandler(TcpClient client)
                             data.AddRange(orderbytes);
                             data.AddRange(lengthbytes);
                             data.AddRange(tunnelSession.Data);
-                            encryptedStream.Write(data.ToArray());
-                            encryptedStream.Flush();
+                            towrite = data.ToArray();
                             data.Clear();
                         }
                     }
                 }
-                if (sw.ElapsedMilliseconds > 1000)
+                if (towrite != null)
                 {
-                    sw.Restart();
+                    encryptedStream.Write(towrite);
+                    encryptedStream.Flush();
+                }
+                if (keepalivesw.ElapsedMilliseconds > 10000)
+                {
+                    keepalivesw.Restart();
                     encryptedStream.Write(new byte[] { 0x10 });
                     encryptedStream.Flush();
                 }
-                if (!tcptunnel.DataAvailable || senderqueue.Count == 0 || nexthopqueue.Count == 0)
+                if (!tcptunnel.DataAvailable && senderqueue.Count == 0 && nexthopqueue.Count == 0)
                 {
                     Thread.Sleep(1);
                 }
@@ -347,6 +425,7 @@ void StableTunnelHandler(TcpClient client)
             catch (Exception ex)
             {
                 Console.WriteLine(ex.StackTrace);
+                throw;
             }
         }
     }
@@ -354,7 +433,8 @@ void StableTunnelHandler(TcpClient client)
     {
         Console.WriteLine(ex.StackTrace);
     }
-    stableTunnelsCount--;
+    if (endpoint.Contains(config.nextHop_address))
+        stableTunnelsCount--;
     Console.WriteLine(String.Format("Dropped Stable Tunnel Connection From: {0}", endpoint));
 }
 void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP = "")
@@ -422,6 +502,7 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
                 if (!nextConnection.Connected || sw.ElapsedMilliseconds > 10000 || !responsesDict[IP].ContainsKey(currentID))
                     break;
                 var read = 0;
+                byte[] towrite = null;
                 lock (ttlock)
                 {
                     if (responsesDict[IP][currentID].Count > 0 && responsesDict[IP][currentID].ContainsKey(readorder))
@@ -441,13 +522,17 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
                         }
                         else
                         {
-                            hopStream.Write(data);
-                            hopStream.Flush();
+                            towrite = data;
                         }
                         responsesDict[IP][currentID].Remove(readorder);
                         readorder++;
                         //buffer.Clear();
                     }
+                }
+                if (towrite != null)
+                {
+                    hopStream.Write(towrite);
+                    hopStream.Flush();
                 }
                 if (nextConnection.Available > 0)
                 {
@@ -458,7 +543,8 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
                     buffer.AddRange(bbbb.Take(read));
                     //} while (nextConnection.Available > 0 && read != 0);
                     //sslStream.Write(buffer.ToArray());
-                    senderqueue.Enqueue(new TunnelSession() { ID = currentID, Data = buffer.ToArray(), order = writeorder, IP = IP, ts = DateTime.Now });
+                    lock (ttlock)
+                        senderqueue.Enqueue(new TunnelSession() { ID = currentID, Data = buffer.ToArray(), order = writeorder, IP = IP, ts = DateTime.Now });
                     writeorder++;
                     buffer.Clear();
                 }
@@ -469,7 +555,7 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.StackTrace);
+                //Console.WriteLine(ex.StackTrace);
             }
 
         }
@@ -479,7 +565,15 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
     {
         Console.WriteLine(ex.StackTrace);
     }
-    responsesDict[IP].Remove(currentID);
+    try
+    {
+        lock (ttlock)
+            responsesDict[IP].Remove(currentID);
+    }
+    catch
+    {
+
+    }
     //Console.WriteLine(String.Format("Dropped Connection From: {0}", IP));
 }
 void BackConnectHandler(TcpClient client)
@@ -495,6 +589,7 @@ void BackConnectHandler(TcpClient client)
         var sslStream = new SslStream(clientstream, true, userCertificateValidationCallback);
         sslStream.AuthenticateAsServer(cert, false, false);
         Console.WriteLine(String.Format("Incoming BackConnect From: {0}", endpoint));
+        sslStream.WriteByte(0x00);
         while (true)
         {
             try
@@ -511,13 +606,13 @@ void BackConnectHandler(TcpClient client)
                     }
                     while (clientstream.DataAvailable && read != -1);
                 }
-                while (stableTunnelsCount < maxStableTunnelsCount)
+                lock (ttlock)
                 {
-                    sslStream.Write(new byte[] { 0x01 });
-                    sslStream.Flush();
-                    lock (tlock)
+                    if (stableTunnelsCount < maxStableTunnelsCount)
                     {
                         stableTunnelsCount++;
+                        sslStream.Write(new byte[] { 0x01 });
+                        sslStream.Flush();
                     }
                 }
                 if (sw.ElapsedMilliseconds > 1000)
@@ -558,6 +653,7 @@ void BackConnectServerHandler(TcpClient client)
         sslStream.AuthenticateAsClient("", null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
         endpoint = clientstream.Socket.RemoteEndPoint.ToString();
         Console.WriteLine(String.Format("Outgoing BackConnect To: {0}", endpoint));
+        sslStream.WriteByte(0x00);
         while (true)
         {
             try

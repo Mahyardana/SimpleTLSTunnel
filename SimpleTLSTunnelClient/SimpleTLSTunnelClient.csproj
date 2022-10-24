@@ -13,6 +13,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\UniversalTunTapDriver\UniversalTunTapDriver\UniversalTunTapDriver.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="cert.crt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

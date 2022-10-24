@@ -7,6 +7,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SimpleTLSTunnelServer", "Si
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SimpleTLSTunnelClient", "SimpleTLSTunnelClient\SimpleTLSTunnelClient.csproj", "{B000FC8C-52E3-4AE1-BC62-4E9EC82AF330}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "UniversalTunTapDriver", "..\UniversalTunTapDriver\UniversalTunTapDriver\UniversalTunTapDriver.csproj", "{B348ED9F-85D9-4E7F-B7A7-81BA28BEE86D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{B000FC8C-52E3-4AE1-BC62-4E9EC82AF330}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B000FC8C-52E3-4AE1-BC62-4E9EC82AF330}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B000FC8C-52E3-4AE1-BC62-4E9EC82AF330}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B348ED9F-85D9-4E7F-B7A7-81BA28BEE86D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B348ED9F-85D9-4E7F-B7A7-81BA28BEE86D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B348ED9F-85D9-4E7F-B7A7-81BA28BEE86D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B348ED9F-85D9-4E7F-B7A7-81BA28BEE86D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
