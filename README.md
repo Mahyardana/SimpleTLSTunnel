@@ -13,7 +13,7 @@ A Simple TLS Based Tunnle (Socks5+TLS)
 
 ## How To Use:
 
-1. Build Solution Using Visual Studio 2022 or Use Release Build (TODO)
+1. Build Solution Using Visual Studio 2022 or Use Release Build or Download Artifacts From Actions and Artifacts Are Always Up To Date
 
 2. Config Server And Client To Connect To Each Other
 
