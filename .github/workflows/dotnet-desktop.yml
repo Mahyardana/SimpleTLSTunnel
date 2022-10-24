@@ -56,7 +56,9 @@ jobs:
                              # https://help.github.com/en/actions/reference/workflow-syntax-for-github-actions#jobsjob_idruns-on
 
     env:
-      Solution_Name: SimpleTLSTunnel.sln                         # Replace with your solution name, i.e. MyWpfApp.sln.
+      Solution_Name: SimpleTLSTunnel.sln # Replace with your solution name, i.e. MyWpfApp.sln.
+      Client_DIR: SimpleTLSTunnelClient\Bin\Release\net6.0
+      Server_DIR: SimpleTLSTunnelServer\Bin\Release\net6.0
 
     steps:
     - name: Checkout
@@ -88,19 +90,16 @@ jobs:
       run: msbuild $env:Solution_Name /p:Configuration=$env:Configuration
       env:
         Configuration: ${{ matrix.configuration }}
-    
-    -name: Create Release Folder
-      run: mkdir release
-    
-    -name: Copy SimpleTLSTunnelClient
-      run: copy SimpleTLSTunnelClient\\Bin\\Release\\net6.0 release\\Client -r 
-      
-    -name: Copy SimpleTLSTunnelServer
-      run: copy SimpleTLSTunnelServer\\Bin\\Release\\net6.0 release\\Server -r 
+
 
     # Upload the MSIX package: https://github.com/marketplace/actions/upload-a-build-artifact
-    - name: Upload build artifacts
+    - name: Upload Client artifacts
       uses: actions/upload-artifact@v3
       with:
-        name: MSIX Package
-        path: ${{ env.Wap_Project_Directory }}\AppPackages
+        name: Client
+        path: ${{ env.Client_DIR }}
+    - name: Upload Server artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: Server
+        path: ${{ env.Server_DIR }}
