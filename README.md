@@ -1,3 +1,5 @@
+[![.NET Core Desktop](https://github.com/Mahyardana/SimpleTLSTunnel/actions/workflows/dotnet-desktop.yml/badge.svg?branch=master)](https://github.com/Mahyardana/SimpleTLSTunnel/actions/workflows/dotnet-desktop.yml)
+
 # SimpleTLSTunnel
 A Simple TLS Based Tunnle (Socks5+TLS)
 
