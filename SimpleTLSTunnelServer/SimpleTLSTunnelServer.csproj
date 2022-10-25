@@ -8,8 +8,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="DotNetProjects.DhcpServer" Version="2.0.26" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
     <PackageReference Include="Socks5" Version="1.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\UniversalTunTapDriver\UniversalTunTapDriver\UniversalTunTapDriver.csproj" />
   </ItemGroup>
 
   <ItemGroup>

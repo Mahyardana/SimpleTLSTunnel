@@ -13,7 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\UniversalTunTapDriver\UniversalTunTapDriver\UniversalTunTapDriver.csproj" />
+    <ProjectReference Include="..\UniversalTunTapDriver\UniversalTunTapDriver\UniversalTunTapDriver.csproj" />
   </ItemGroup>
 
   <ItemGroup>

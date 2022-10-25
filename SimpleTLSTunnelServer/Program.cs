@@ -9,19 +9,21 @@ using Newtonsoft.Json;
 using System.Security.Cryptography;
 using System.Net;
 using System.Collections.Concurrent;
-#pragma warning disable CS8603 
+using UniversalTunTapDriver;
+#pragma warning disable CS8603
 #pragma warning disable CS8602
-#pragma warning disable CS8600 
+#pragma warning disable CS8600
 ThreadPool.SetMaxThreads(1000, 1000);
 //object tlock = new object();
 object ttlock = new object();
+var ipassigner = new IPAssigner(IPAddress.Parse("10.10.1.2"), IPAddress.Parse("10.10.2.255"));
 ConcurrentQueue<TcpClient> backConnects = new ConcurrentQueue<TcpClient>();
-
+var assignedIPs = new Dictionary<string, IPAddress>();
 var stableTunnelsCount = 0;
 var maxStableTunnelsCount = 4;
 ConcurrentQueue<TunnelSession> senderqueue = new ConcurrentQueue<TunnelSession>();
 ConcurrentQueue<TunnelSession> nexthopqueue = new ConcurrentQueue<TunnelSession>();
-Dictionary<string, Dictionary<ulong, Dictionary<ulong, Packet>>> responsesDict = new Dictionary<string, Dictionary<ulong, Dictionary<ulong, Packet>>>();
+Dictionary<ulong, Dictionary<ulong, Packet>> responsesDict = new Dictionary<ulong, Dictionary<ulong, Packet>>();
 TTunnelServerConfig config = null;
 if (!File.Exists("config.json"))
 {
@@ -70,7 +72,27 @@ void StableTunnelHandler(TcpClient client)
         else
             lastserver = false;
         Console.WriteLine(String.Format("Stable Tunnel Connection From: {0}", endpoint));
-        encryptedStream.WriteByte(0x00); 
+        encryptedStream.WriteByte(0x00);
+        lock (ttlock)
+        {
+            //Assign IP
+            {
+                var data = new List<byte>();
+                data.Add(0x20);
+                IPAddress assignedip = null;
+                if (!assignedIPs.ContainsKey(IP))
+                {
+                    assignedip = ipassigner.GetNewIP();
+                    assignedIPs.Add(IP, assignedip);
+                }
+                else
+                    assignedip = assignedIPs[IP];
+                data.AddRange(assignedip.GetAddressBytes());
+                encryptedStream.Write(data.ToArray());
+                data.Clear();
+            }
+        }
+
         byte[] towrite = null;
         while (true)
         {
@@ -124,10 +146,11 @@ void StableTunnelHandler(TcpClient client)
                         {
                             ip += ":" + IP;
                         }
+                        ip = "";
 
                         //Console.WriteLine("incoming: " + ip);
-                        if (!responsesDict.ContainsKey(ip))
-                            responsesDict.Add(ip, new Dictionary<ulong, Dictionary<ulong, Packet>>());
+                        //if (!responsesDict.ContainsKey(ip))
+                        //    responsesDict.Add(ip, new Dictionary<ulong, Dictionary<ulong, Packet>>());
                         encryptedStream.Read(lengthbytes);
                         var length = BitConverter.ToInt32(lengthbytes);
                         var buffer = new byte[65536];
@@ -143,24 +166,24 @@ void StableTunnelHandler(TcpClient client)
                         {
                             lock (ttlock)
                             {
-                                if (!responsesDict[ip].ContainsKey(sessionid))
+                                if (!responsesDict.ContainsKey(sessionid))
                                 {
                                     try
                                     {
-                                        responsesDict[ip].Add(sessionid, new Dictionary<ulong, Packet>());
+                                        responsesDict.Add(sessionid, new Dictionary<ulong, Packet>());
+                                        new Thread(() =>
+                                        {
+                                            ClientHandler(null, 0, "");
+                                        }).Start();
                                     }
                                     catch
                                     {
 
                                     }
-                                    new Thread(() =>
-                                    {
-                                        ClientHandler(null, sessionid, ip);
-                                    }).Start();
                                 }
                                 try
                                 {
-                                    responsesDict[ip][sessionid].Add(order, new Packet() { data = data.ToArray(), ts = DateTime.Now });
+                                    responsesDict[sessionid].Add(order, new Packet() { data = data.ToArray(), ts = DateTime.Now });
                                 }
                                 catch
                                 {
@@ -239,7 +262,7 @@ void StableTunnelHandler(TcpClient client)
                                 }
                                 try
                                 {
-                                    responsesDict[ip].Remove(sessionid);
+                                    responsesDict.Remove(sessionid);
                                 }
                                 catch
                                 {
@@ -283,7 +306,7 @@ void StableTunnelHandler(TcpClient client)
                             try
                             {
                                 lock (ttlock)
-                                    responsesDict[ip][sessionid].Add(order, new Packet() { data = new byte[] { 0x04 }, ts = DateTime.Now });
+                                    responsesDict[sessionid].Add(order, new Packet() { data = new byte[] { 0x04 }, ts = DateTime.Now });
                             }
                             catch
                             {
@@ -291,7 +314,7 @@ void StableTunnelHandler(TcpClient client)
                             }
                         }
                     }
-                    else if(type==0x10)
+                    else if (type == 0x10)
                     {
                         Console.WriteLine("Keep-Alive");
                     }
@@ -443,6 +466,31 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
     bool encryptfornext = false;
     try
     {
+        var foundtundevice = false;
+        var taps = TunTapHelper_windows.GetTapGuidList("tap0901");
+        TunTapDevice tundevice = null;
+        foreach (var tap in taps)
+        {
+            tundevice = new TunTapDevice(tap);
+            if (tundevice.GetMTU() != -1)
+            {
+                foundtundevice = true;
+                break;
+            }
+        }
+        if (!foundtundevice)
+        {
+            var tapinfo = new TunTapHelper.TunTapDeviceInfo();
+            tapinfo.Name = "SimpleTLSTunnel";
+            tapinfo.Guid = "{" + Guid.NewGuid().ToString().ToUpper() + "}";
+            tundevice = new TunTapDevice(tapinfo);
+        }
+        var version = tundevice.GetVersion();
+        //tundevice.SetDHCPState(0);
+        tundevice.SetConnectionState(TunTapHelper.ConnectionStatus.Connected);
+        SetIP(tundevice.Name, IPAddress.Parse("10.10.1.1"), IPAddress.Parse("255.255.0.0"));
+        var streamcreated = tundevice.CreateDeviceIOStream(1500);
+        var stream = tundevice.TunTapDeviceIOStream;
         ulong readorder = 0;
         ulong writeorder = 0;
         var buffer = new List<byte>();
@@ -461,7 +509,6 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
         //sslStream.AuthenticateAsServer(cert, false, false);
         //Console.WriteLine(String.Format("Incoming Connection From: {0}", IP));
 
-        TcpClient nextConnection = null;
         Stream hopStream = null;
         //if (config.BackConnectCapability && config.BackConnect_address == "127.0.0.1")
         //{
@@ -483,10 +530,10 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
         //}
         //else
         //{
-        nextConnection = new TcpClient(config.nextHop_address, config.nextHop_port);
-        nextConnection.ReceiveTimeout = 30000;
-        nextConnection.SendTimeout = 30000;
-        hopStream = nextConnection.GetStream();
+        //nextConnection = new TcpClient(config.nextHop_address, config.nextHop_port);
+        //nextConnection.ReceiveTimeout = 30000;
+        //nextConnection.SendTimeout = 30000;
+        hopStream = stream;
         //}
         //if (config.nextHop_address != "" && config.nextHop_address != "127.0.0.1")
         //{
@@ -499,14 +546,15 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
         {
             try
             {
-                if (!nextConnection.Connected || sw.ElapsedMilliseconds > 10000 || !responsesDict[IP].ContainsKey(currentID))
+                if (sw.ElapsedMilliseconds > 10000 || !responsesDict.ContainsKey(currentID))
                     break;
                 var read = 0;
                 byte[] towrite = null;
                 lock (ttlock)
                 {
-                    if (responsesDict[IP][currentID].Count > 0 && responsesDict[IP][currentID].ContainsKey(readorder))
+                    if (responsesDict[currentID].Count > 0 && responsesDict[currentID].ContainsKey(readorder))
                     {
+                        Console.WriteLine(readorder);
                         sw.Restart();
                         //var bbbb = new byte[65536];
                         //do
@@ -516,7 +564,7 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
                         //}
                         //while (clientstream.DataAvailable && read != 0);
                         //Console.Write(Encoding.ASCII.GetString(buffer.ToArray()));
-                        byte[] data = responsesDict[IP][currentID][readorder].data;
+                        byte[] data = responsesDict[currentID][readorder].data;
                         if (data.Length == 1 && data[0] == 0x04)
                         {
                         }
@@ -524,7 +572,7 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
                         {
                             towrite = data;
                         }
-                        responsesDict[IP][currentID].Remove(readorder);
+                        responsesDict[currentID].Remove(readorder);
                         readorder++;
                         //buffer.Clear();
                     }
@@ -534,12 +582,12 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
                     hopStream.Write(towrite);
                     hopStream.Flush();
                 }
-                if (nextConnection.Available > 0)
                 {
                     var bbbb = new byte[65536];
                     //do
                     //{
                     read = hopStream.Read(bbbb, 0, bbbb.Length);
+                    hopStream.Flush();
                     buffer.AddRange(bbbb.Take(read));
                     //} while (nextConnection.Available > 0 && read != 0);
                     //sslStream.Write(buffer.ToArray());
@@ -555,11 +603,10 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
             }
             catch (Exception ex)
             {
-                //Console.WriteLine(ex.StackTrace);
+                Console.WriteLine(ex.StackTrace);
             }
 
         }
-        nextConnection.Close();
     }
     catch (Exception ex)
     {
@@ -568,7 +615,7 @@ void ClientHandler(TcpClient client, ulong currentID = ulong.MaxValue, string IP
     try
     {
         lock (ttlock)
-            responsesDict[IP].Remove(currentID);
+            responsesDict.Remove(currentID);
     }
     catch
     {
@@ -707,7 +754,18 @@ X509Certificate userCertificateSelectionCallback(object sender, string targetHos
 {
     return cert as X509Certificate;
 }
-
+bool SetIP(string networkInterfaceName, IPAddress ipAddress, IPAddress subnetMask, IPAddress gateway = null)
+{
+    var process = new Process
+    {
+        StartInfo = new ProcessStartInfo("netsh", $"interface ip set address \"{networkInterfaceName}\" static {ipAddress} {subnetMask} " + (gateway == null ? "" : $"{gateway} 1"))
+    };
+    process.Start();
+    process.WaitForExit();
+    var successful = process.ExitCode == 0;
+    process.Dispose();
+    return successful;
+}
 bool userCertificateValidationCallback(object sender, X509Certificate? certificate, X509Chain? chain, SslPolicyErrors sslPolicyErrors)
 {
     return true;

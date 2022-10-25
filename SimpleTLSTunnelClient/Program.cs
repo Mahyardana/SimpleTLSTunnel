@@ -15,45 +15,24 @@ using System.Net.NetworkInformation;
 #pragma warning disable CS8603 
 #pragma warning disable CS8602
 #pragma warning disable CS8600 
-var foundtundevice = false;
-var taps = TunTapHelper_windows.GetTapGuidList("tap0901");
-TunTapDevice tundevice = null;
-foreach (var tap in taps)
+
+var routes = new List<string>();
+var defaultroute = "";
+IPAddress ipaddress = null;
+void OnProcessExit(object? sender, EventArgs e)
 {
-    tundevice = new TunTapDevice(tap);
-    if (tundevice.Name == "SimpleTLSTunnel")
+    var routeprocess = new Process();
+    routeprocess.StartInfo = new ProcessStartInfo("route.exe", "ADD " + defaultroute);
+    routeprocess.Start();
+    routeprocess.WaitForExit();
+    foreach (var route in routes)
     {
-        foundtundevice = true;
-        break;
+        routeprocess = new Process();
+        routeprocess.StartInfo = new ProcessStartInfo("route.exe", "DELETE " + route);
+        routeprocess.Start();
+        routeprocess.WaitForExit();
     }
 }
-if (!foundtundevice)
-{
-    var tapinfo = new TunTapHelper.TunTapDeviceInfo();
-    tapinfo.Name = "SimpleTLSTunnel";
-    tapinfo.Guid = "{" + Guid.NewGuid().ToString().ToUpper() + "}";
-    tundevice = new TunTapDevice(tapinfo);
-}
-var version = tundevice.GetVersion();
-tundevice.SetConnectionState(TunTapHelper.ConnectionStatus.Connected);
-var streamcreated = tundevice.CreateDeviceIOStream(1500);
-var stream = tundevice.TunTapDeviceIOStream;
-var str = "";
-while (true)
-{
-    while(true)
-    {
-
-        var b = stream.ReadByte();
-        str += Convert.ToChar(b);
-        if (b == 0)
-            break;
-    }
-
-    Console.WriteLine(str);
-    str = "";
-}
-tundevice.ConfigTun(IPAddress.Parse("10.1.1.10"), IPAddress.Parse("10.1.1.1"), IPAddress.Parse("255.255.255.0"));
 IPAddress GetDefaultGateway()
 {
     return NetworkInterface.GetAllNetworkInterfaces()
@@ -66,7 +45,19 @@ IPAddress GetDefaultGateway()
         // .Where(a => Array.FindIndex(a.GetAddressBytes(), b => b != 0) >= 0)
         .FirstOrDefault();
 }
-var dg = GetDefaultGateway();
+IPAddress GetCurrentIP()
+{
+    var host = Dns.GetHostEntry(Dns.GetHostName());
+    foreach (var ip in host.AddressList)
+    {
+        if (ip.AddressFamily == AddressFamily.InterNetwork)
+        {
+            return ip;
+        }
+    }
+
+    return null;
+}
 object tlock = new object();
 ulong lastSessionID = 0;
 var stableTunnelsCount = 0;
@@ -165,12 +156,20 @@ void StableTunnelHandler()
                                 data.AddRange(buffer.Take(read));
                                 totalread += read;
                             }
-                            if (responsesDict.ContainsKey(sessionid))
+                            if (!responsesDict.ContainsKey(sessionid))
                             {
-                                responsesDict[sessionid].Add(order, new Packet() { data = data.ToArray(), ts = DateTime.Now });
+                                responsesDict.Add(sessionid, new Dictionary<ulong, Packet>());
                             }
+                            responsesDict[sessionid].Add(order, new Packet() { data = data.ToArray(), ts = DateTime.Now });
                         }
                         data.Clear();
+                    }
+                    else if (type == 0x20)
+                    {
+                        var ipbytes = new byte[4];
+                        encryptedStream.Read(ipbytes);
+                        var iptext = ipbytes[0].ToString() + "." + ipbytes[1].ToString() + "." + ipbytes[2].ToString() + "." + ipbytes[3].ToString();
+                        ipaddress = IPAddress.Parse(iptext);
                     }
                 }
                 lock (tlock)
@@ -242,7 +241,53 @@ void StableTunnelHandler()
     }
     stableTunnelsCount--;
 }
-void ClientHandler(TcpClient client)
+bool SetIP(string networkInterfaceName, IPAddress ipAddress, IPAddress subnetMask, IPAddress gateway = null)
+{
+    var process = new Process
+    {
+        StartInfo = new ProcessStartInfo("netsh", $"interface ip set address \"{networkInterfaceName}\" static {ipAddress} {subnetMask} " + (gateway == null ? "" : $"{gateway} 1"))
+    };
+    process.Start();
+    process.WaitForExit();
+    process = new Process
+    {
+        StartInfo = new ProcessStartInfo("netsh", $"interface ip set dnsservers \"{networkInterfaceName}\" static {gateway}")
+    };
+    process.Start();
+    process.WaitForExit();
+    var successful = process.ExitCode == 0;
+    process.Dispose();
+    return successful;
+}
+void SetRoutes()
+{
+    var dg = GetDefaultGateway();
+    var route = $"0.0.0.0 MASK 0.0.0.0 " + dg;
+    defaultroute = route;
+    var process = new Process
+    {
+        StartInfo = new ProcessStartInfo("route.exe", $"DELETE " + route)
+    };
+    process.Start();
+    process.WaitForExit();
+    process.Dispose();
+    route = $"\"{config.server_address}\" MASK 255.255.255.255 " + dg;
+    routes.Add(route);
+    process = new Process
+    {
+        StartInfo = new ProcessStartInfo("route.exe", $"ADD " + route)
+    };
+    process.Start();
+    process.WaitForExit();
+    process.Dispose();
+    route = "0.0.0.0 MASK 0.0.0.0 10.10.1.1";
+    routes.Add(route);
+    process = new Process
+    {
+        StartInfo = new ProcessStartInfo("route.exe", $"ADD " + route)
+    };
+}
+void ClientHandler(TcpClient client = null)
 {
     string endpoint = "";
     var currentID = lastSessionID;
@@ -253,11 +298,42 @@ void ClientHandler(TcpClient client)
     }
     try
     {
+        while (ipaddress == null)
+        {
+            Thread.Sleep(100);
+        }
+        var foundtundevice = false;
+        var taps = TunTapHelper_windows.GetTapGuidList("tap0901");
+        TunTapDevice tundevice = null;
+        foreach (var tap in taps)
+        {
+            tundevice = new TunTapDevice(tap);
+            if (tundevice.GetMTU() != -1)
+            {
+                foundtundevice = true;
+                break;
+            }
+        }
+        if (!foundtundevice)
+        {
+            var tapinfo = new TunTapHelper.TunTapDeviceInfo();
+            tapinfo.Name = "SimpleTLSTunnel";
+            tapinfo.Guid = "{" + Guid.NewGuid().ToString().ToUpper() + "}";
+            tundevice = new TunTapDevice(tapinfo);
+        }
+        var version = tundevice.GetVersion();
+        //tundevice.SetDHCPState(0);
+        //var configed=tundevice.ConfigTun(ipaddress, IPAddress.Parse("10.10.1.1"), IPAddress.Parse("255.255.0.0"));
+        tundevice.SetConnectionState(TunTapHelper.ConnectionStatus.Connected);
+        SetIP(tundevice.Name, ipaddress, IPAddress.Parse("255.255.0.0"), IPAddress.Parse("10.10.1.1"));
+        SetRoutes();
+        var streamcreated = tundevice.CreateDeviceIOStream(1500);
+        var stream = tundevice.TunTapDeviceIOStream;
         ulong readorder = 0;
         ulong writeorder = 0;
         var buffer = new List<byte>();
-        NetworkStream clientstream = client.GetStream();
-        endpoint = clientstream.Socket.RemoteEndPoint.ToString();
+        //NetworkStream clientstream = client.GetStream();
+        //endpoint = clientstream.Socket.RemoteEndPoint.ToString();
         //Console.WriteLine(String.Format("Incoming Connection From: {0}", endpoint));
         bool sfirst = true, rfirst = true;
         var pinger = new Stopwatch();
@@ -268,16 +344,16 @@ void ClientHandler(TcpClient client)
         {
             try
             {
-                if (!client.Connected || sw.ElapsedMilliseconds > 30000)
-                    break;
+                //if (!client.Connected || sw.ElapsedMilliseconds > 30000)
+                //    break;
                 var read = 0;
-                if (clientstream.DataAvailable)
+                //if (clientstream.DataAvailable)
                 {
-                    sw.Restart();
+                    //sw.Restart();
                     var bbbb = new byte[65536];
                     //do
                     {
-                        read = clientstream.Read(bbbb, 0, bbbb.Length);
+                        read = stream.Read(bbbb, 0, bbbb.Length);
                         buffer.AddRange(bbbb.Take(read));
                     }
                     //while (clientstream.DataAvailable && read != 0);
@@ -298,6 +374,7 @@ void ClientHandler(TcpClient client)
                 {
                     if (responsesDict[currentID].Count > 0 && responsesDict[currentID].ContainsKey(readorder))
                     {
+                        Console.WriteLine(readorder);
                         sw.Restart();
                         byte[] bbbb = responsesDict[currentID][readorder].data;
                         responsesDict[currentID].Remove(readorder);
@@ -306,8 +383,8 @@ void ClientHandler(TcpClient client)
                         //    read = encryptedStream.Read(bbbb, 0, bbbb.Length);
                         //    buffer.AddRange(bbbb.Take(read));
                         //} while (tcptunnel.DataAvailable && read != 0);
-                        clientstream.Write(bbbb);
-                        clientstream.Flush();
+                        stream.Write(bbbb);
+                        stream.Flush();
 
                         readorder++;
                         senderqueue.Enqueue(new TunnelSession() { ID = currentID, ts = DateTime.Now, ack = true, order = writeorder });
@@ -353,17 +430,16 @@ X509Certificate userCertificateSelectionCallback(object sender, string targetHos
     return cert as X509Certificate;
 }
 
-var tcplistener = new TcpListener(System.Net.IPAddress.Any, config.proxy_listening_port);
-tcplistener.Start();
+//var tcplistener = new TcpListener(System.Net.IPAddress.Any, config.proxy_listening_port);
+//tcplistener.Start();
+System.AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
+new Thread(() =>
+{
+    ClientHandler();
+}).Start();
+
 while (true)
 {
-    if (tcplistener.Pending())
-    {
-        new Thread(() =>
-        {
-            ClientHandler(tcplistener.AcceptTcpClient());
-        }).Start();
-    }
     if (stableTunnelsCount < maxStableTunnelsCount)
     {
         try
