@@ -12,7 +12,7 @@ using System.Drawing.Drawing2D;
 
 var firsttunnelsinit = true;
 object tlock = new object();
-ulong lastSessionID = 0;
+ulong lastSessionID = 1;
 var stableTunnelsCount = 0;
 var maxStableTunnelsCount = 16;
 var maxping = 0l;
@@ -344,7 +344,7 @@ X509Certificate userCertificateSelectionCallback(object sender, string targetHos
     return cert as X509Certificate;
 }
 
-var tcplistener = new TcpListener(System.Net.IPAddress.Any, config.proxy_listening_port);
+var tcplistener = new TcpListener(System.Net.IPAddress.Loopback, config.proxy_listening_port);
 tcplistener.Start();
 while (true)
 {

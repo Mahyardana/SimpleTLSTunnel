@@ -19,6 +19,7 @@ ConcurrentQueue<TunnelSession> senderqueue = new ConcurrentQueue<TunnelSession>(
 ConcurrentQueue<TunnelSession> nexthopqueue = new ConcurrentQueue<TunnelSession>();
 Dictionary<string, Dictionary<ulong, Dictionary<ulong, Packet>>> responsesDict = new Dictionary<string, Dictionary<ulong, Dictionary<ulong, Packet>>>();
 Dictionary<string, Dictionary<ulong, SocksSession>> connections = new Dictionary<string, Dictionary<ulong, SocksSession>>();
+Dictionary<string, Dictionary<ulong, ulong>> acksDict = new Dictionary<string, Dictionary<ulong, ulong>>();
 TTunnelServerConfig config = null;
 if (!File.Exists("config.json"))
 {
@@ -110,7 +111,10 @@ void StableTunnelHandler(TcpClient client)
                         {
                             ip += ":" + IP;
                         }
-
+                        if(!acksDict.ContainsKey(ip))
+                        {
+                            acksDict.Add(ip, new Dictionary<ulong, ulong>());
+                        }
                         encryptedStream.Read(lengthbytes);
                         var length = BitConverter.ToInt32(lengthbytes);
                         var buffer = new byte[65536];
@@ -217,10 +221,10 @@ void StableTunnelHandler(TcpClient client)
                         }
                         if (!lastserver)
                         {
-                            if (endpoint.Contains(config.nextHop_address))
-                                senderqueue.Enqueue(new TunnelSession() { ID = sessionid, IP = ip, ts = DateTime.Now, ack = true, order = order });
-                            else
-                                nexthopqueue.Enqueue(new TunnelSession() { ID = sessionid, IP = ip, ts = DateTime.Now, ack = true, order = order });
+                            //if (endpoint.Contains(config.nextHop_address))
+                            //    senderqueue.Enqueue(new TunnelSession() { ID = sessionid, IP = ip, ts = DateTime.Now, ack = true, order = order });
+                            //else
+                            //    nexthopqueue.Enqueue(new TunnelSession() { ID = sessionid, IP = ip, ts = DateTime.Now, ack = true, order = order });
                         }
                         else
                         {
@@ -269,6 +273,14 @@ void StableTunnelHandler(TcpClient client)
                         }
                         else
                         {
+                            if (!acksDict[IP].ContainsKey(tunnelSession.ID))
+                            {
+                                acksDict[IP].Add(tunnelSession.ID, tunnelSession.order);
+                            }
+                            else
+                            {
+                                acksDict[IP][tunnelSession.ID] = tunnelSession.order;
+                            }
                             var orderbytes = BitConverter.GetBytes(tunnelSession.order);
                             var lengthbytes = BitConverter.GetBytes(tunnelSession.Data.Length);
                             var data = new List<byte>();
@@ -282,6 +294,7 @@ void StableTunnelHandler(TcpClient client)
                             encryptedStream.Write(data.ToArray());
                             encryptedStream.Flush();
                             data.Clear();
+                            
                         }
                     }
                 }
@@ -321,6 +334,14 @@ void StableTunnelHandler(TcpClient client)
                         }
                         else
                         {
+                            if (!acksDict[IP].ContainsKey(tunnelSession.ID))
+                            {
+                                acksDict[IP].Add(tunnelSession.ID, tunnelSession.order);
+                            }
+                            else
+                            {
+                                acksDict[IP][tunnelSession.ID] = tunnelSession.order;
+                            }
                             var orderbytes = BitConverter.GetBytes(tunnelSession.order);
                             var lengthbytes = BitConverter.GetBytes(tunnelSession.Data.Length);
                             var data = new List<byte>();
@@ -431,12 +452,12 @@ void ClientHandler(string IP = "")
                     var hopStream = connections[IP][currentID].client.GetStream();
                     lock (ttlock)
                     {
-                        if (responsesDict[IP][currentID].ContainsKey(connections[IP][currentID].expectedack))
-                        {
-                            responsesDict[IP][currentID].Remove(connections[IP][currentID].expectedack);
-                            connections[IP][currentID].expectedack = 0;
-                            connections[IP][currentID].packetsforack = 0;
-                        }
+                        //if (responsesDict[IP][currentID].ContainsKey(connections[IP][currentID].expectedack))
+                        //{
+                        //    responsesDict[IP][currentID].Remove(connections[IP][currentID].expectedack);
+                        //    connections[IP][currentID].expectedack = 0;
+                        //    connections[IP][currentID].packetsforack = 0;
+                        //}
                         while (packets.Count > 0 && responsesDict[IP][currentID].ContainsKey(connections[IP][currentID].readorder))
                         {
                             sw.Restart();
@@ -471,10 +492,10 @@ void ClientHandler(string IP = "")
                         //sslStream.Write(buffer.ToArray());
                         senderqueue.Enqueue(new TunnelSession() { ID = currentID, Data = buffer.ToArray(), order = connections[IP][currentID].writeorder, IP = IP, ts = DateTime.Now });
                         //if ((buffer.Count >= 65536 && connections[IP][currentID].packetsforack >= 10) && (buffer.Count <= 0 && connections[IP][currentID].packetsforack >= 3))
-                        {
-                            connections[IP][currentID].expectedack = connections[IP][currentID].writeorder;
-                        }
-                        connections[IP][currentID].packetsforack++;
+                        //{
+                        //    connections[IP][currentID].expectedack = connections[IP][currentID].writeorder;
+                        //}
+                        //connections[IP][currentID].packetsforack++;
                         connections[IP][currentID].writeorder += 2;
                         buffer.Clear();
                     }
