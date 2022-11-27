@@ -57,8 +57,8 @@ jobs:
 
     env:
       Solution_Name: SimpleTLSTunnel.sln # Replace with your solution name, i.e. MyWpfApp.sln.
-      Client_DIR: SimpleTLSTunnelClient\Bin\Release\net6.0
-      Server_DIR: SimpleTLSTunnelServer\Bin\Release\net6.0
+      Client_DIR: SimpleTLSTunnelClient\Bin\Release\net7.0
+      Server_DIR: SimpleTLSTunnelServer\Bin\Release\net7.0
 
     steps:
     - name: Checkout
