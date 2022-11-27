@@ -4,7 +4,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Diagnostics;
 using Newtonsoft;
-using SimpleTLSTunnleServer;
+using SimpleTLSTunnelServer;
 using Newtonsoft.Json;
 using System.Security.Cryptography;
 using System.Net;
@@ -23,10 +23,40 @@ else
 {
     config = JsonConvert.DeserializeObject<TTunnelServerConfig>(File.ReadAllText("config.json"));
 }
+var random = RandomNumberGenerator.Create();
+byte[] Encrypt(AesGcm aes, byte[] bytes)
+{
+    byte[] cipher = new byte[bytes.Length];
+    byte[] nonce = new byte[12];
+    byte[] tag = new byte[16];
+    //var arr1 = new BitArray(hash.Take(16).ToArray());
+    //var arr2 = new BitArray(hash.Take(Range.StartAt(16)).ToArray());
+    //var xor=arr1.Xor(arr2);
+    //hash.CopyTo(tag, 0);
+    var res = new List<byte>();
+    random.GetBytes(nonce, 0, nonce.Length);
+    res.AddRange(nonce);
+    aes.Encrypt(nonce, bytes, cipher, tag);
+    res.AddRange(tag);
+    res.AddRange(cipher);
+    return res.ToArray();
+}
 
+
+byte[] Decrypt(AesGcm aes, byte[] encrypted)
+{
+    var res = new List<byte>(encrypted);
+    byte[] plain = new byte[encrypted.Length - 12 - 16];
+    byte[] nonce = res.Take(12).ToArray();
+    res.RemoveRange(0, nonce.Length);
+    byte[] tag = res.Take(16).ToArray();
+    res.RemoveRange(0, tag.Length);
+    aes.Decrypt(nonce, res.ToArray(), tag, plain);
+    return plain;
+}
 int connectionsRequired = 0;
-var cert = new X509Certificate("cert.pfx");
-void ClientHandler(TcpClient client)
+var cert = new X509Certificate2("cert.pfx");
+void ClientHandler(Socket client)
 {
     string endpoint = "";
     bool encryptfornext = false;
@@ -35,20 +65,45 @@ void ClientHandler(TcpClient client)
         var buffer = new List<byte>();
         var sw = new Stopwatch();
         sw.Start();
-        if (client == null)
+        //if (client == null)
+        //{
+        //    client = new TcpClient(config.BackConnect_address, config.BackConnect_port);
+        //    while (client.Available <= 0)
+        //    {
+        //        Thread.Sleep(1);
+        //    }
+        //}
+
+        //NetworkStream clientstream = client.GetStream();
+        var byteget = new byte[1];
+        client.Receive(byteget, 0, 1, SocketFlags.None);
+        byte res = byteget[0];
+        if (res != 0x00)
         {
-            client = new TcpClient(config.BackConnect_address, config.BackConnect_port);
-            while (client.Available <= 0)
-            {
-                Thread.Sleep(1);
-            }
+            client.Close();
+            return;
         }
-
-        NetworkStream clientstream = client.GetStream();
-        endpoint = clientstream.Socket.RemoteEndPoint.ToString();
-
-        var sslStream = new SslStream(clientstream, true, userCertificateValidationCallback);
-        sslStream.AuthenticateAsServer(cert, false, false);
+        var publickey = cert.GetRSAPublicKey().ExportRSAPublicKey();
+        client.Send(new byte[] { 0x01 });
+        client.Send(BitConverter.GetBytes(publickey.Length));
+        client.Send(publickey);
+        endpoint = client.RemoteEndPoint.ToString();
+        client.Receive(byteget,0,1,SocketFlags.None);
+        res = byteget[0];
+        if (res != 0x02)
+        {
+            client.Close();
+            return;
+        }
+        var len = new byte[4];
+        client.Receive(len, 0, len.Length,SocketFlags.None);
+        var length = BitConverter.ToInt32(len, 0);
+        var buffer1 = new byte[length];
+        client.Receive(buffer1, 0, length, SocketFlags.None);
+        var key = cert.GetRSAPrivateKey().Decrypt(buffer1, RSAEncryptionPadding.OaepSHA1);
+        var aes = new AesGcm(key);
+        //var sslStream = new SslStream(clientstream, true, userCertificateValidationCallback);
+        //sslStream.AuthenticateAsServer(cert, false, false);
         Console.WriteLine(String.Format("Incoming Connection From: {0}", endpoint));
 
         TcpClient nextConnection = null;
@@ -86,19 +141,28 @@ void ClientHandler(TcpClient client)
             try
             {
                 var read = 0;
-                if (clientstream.DataAvailable)
+                if (client.Available > 0)
                 {
                     sw.Restart();
+                    client.Receive(byteget, 0, 1, SocketFlags.None);
+                    res = byteget[0];
+                    len = new byte[4];
                     var bbbb = new byte[65536];
-                    do
+                    client.Receive(len, 0, len.Length, SocketFlags.None);
+                    length = BitConverter.ToInt32(len, 0);
+                    if (res == 0x03)
                     {
-                        read = sslStream.Read(bbbb, 0, bbbb.Length);
-                        buffer.AddRange(bbbb.Take(read));
+                        read = 0;
+                        do
+                        {
+                            var toread = length - buffer.Count;
+                            read = client.Receive(bbbb, 0, bbbb.Length > toread ? toread : bbbb.Length, SocketFlags.None);
+                            buffer.AddRange(bbbb.Take(read));
+                        } while (buffer.Count < length);
+                        var dec = Decrypt(aes, buffer.ToArray());
+                        hopStream.Write(dec, 0, dec.Length);
+                        buffer.Clear();
                     }
-                    while (clientstream.DataAvailable && read != 0);
-                    //Console.Write(Encoding.ASCII.GetString(buffer.ToArray()));
-                    hopStream.Write(buffer.ToArray());
-                    buffer.Clear();
                 }
                 if (nextConnection.Available > 0)
                 {
@@ -109,7 +173,11 @@ void ClientHandler(TcpClient client)
                         read = hopStream.Read(bbbb, 0, bbbb.Length);
                         buffer.AddRange(bbbb.Take(read));
                     } while (nextConnection.Available > 0 && read != 0);
-                    sslStream.Write(buffer.ToArray());
+                    //sslStream.Write(buffer.ToArray());
+                    var enc = Encrypt(aes, buffer.ToArray());
+                    client.Send(new byte[] { 0x03 });
+                    client.Send(BitConverter.GetBytes(enc.Length));
+                    client.Send(enc);
                     buffer.Clear();
                 }
                 if (read == 0)
@@ -265,10 +333,12 @@ bool userCertificateValidationCallback(object sender, X509Certificate? certifica
 {
     return true;
 }
-
-var tcplistener = new TcpListener(System.Net.IPAddress.Any, config.ListeningPort);
-tcplistener.Start();
-if (config.nextHop_address == "127.0.0.1")
+var listenersocket = new Socket(SocketType.Stream, ProtocolType.IP);
+listenersocket.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Any, config.ListeningPort));
+listenersocket.Listen();
+//var tcplistener = new TcpListener(System.Net.IPAddress.Any, config.ListeningPort);
+//tcplistener.Start();
+if (config.nextHop_address == "127.0.0.1" && !config.PortForwarding)
 {
     var socksServer = new Socks5.Servers.SimpleSocks5Server(new System.Net.IPEndPoint(System.Net.IPAddress.Any, config.nextHop_port));
     socksServer.StartAsync();
@@ -283,14 +353,14 @@ if (config.BackConnectCapability && config.BackConnect_address == "127.0.0.1")
 
 while (true)
 {
-    if (tcplistener.Pending())
+    if (listenersocket.Poll(0, SelectMode.SelectRead))
     {
-        var client = tcplistener.AcceptTcpClient();
-        if (client.Client.RemoteEndPoint.ToString().Contains(config.nextHop_address))
-        {
-            backConnects.Enqueue(client);
-        }
-        else
+        var client = listenersocket.Accept();
+        //if (client.Client.RemoteEndPoint.ToString().Contains(config.nextHop_address))
+        //{
+        //    backConnects.Enqueue(client);
+        //}
+        //else
         {
             new Thread(() =>
             {

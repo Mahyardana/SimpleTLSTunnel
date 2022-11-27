@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace SimpleTLSTunnleServer
+namespace SimpleTLSTunnelServer
 {
     public class TTunnelServerConfig
     {
@@ -15,5 +15,6 @@ namespace SimpleTLSTunnleServer
         public string BackConnect_address = "127.0.0.1";
         public int BackConnectManager_port = 444;
         public int BackConnect_port = 443;
+        public bool PortForwarding = false;
     }
 }
