@@ -60,7 +60,6 @@ byte[] Decrypt(AesGcm aes, byte[] encrypted)
 //    var dectext = Encoding.ASCII.GetString(decrypted);
 //}
 
-var cert = new X509Certificate2("cert.crt");
 bool userCertificateValidationCallback(object sender, X509Certificate? certificate, X509Chain? chain, SslPolicyErrors sslPolicyErrors)
 {
     //var servercert = certificate as X509Certificate2;
@@ -183,7 +182,8 @@ void ClientHandler(TcpClient client)
 
 X509Certificate userCertificateSelectionCallback(object sender, string targetHost, X509CertificateCollection localCertificates, X509Certificate? remoteCertificate, string[] acceptableIssuers)
 {
-    return cert as X509Certificate;
+    //return cert as X509Certificate;
+    return null;
 }
 
 var tcplistener = new TcpListener(System.Net.IPAddress.Any, config.proxy_listening_port);
