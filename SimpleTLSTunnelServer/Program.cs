@@ -79,7 +79,7 @@ void ClientHandler(TcpClient client)
         if (config.nextHop_address != "" && config.nextHop_address != "127.0.0.1")
         {
             hopStream = new SslStream(nextConnection.GetStream(), true, userCertificateValidationCallback);
-            ((SslStream)hopStream).AuthenticateAsClient("", null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
+            ((SslStream)hopStream).AuthenticateAsClient(config.nextHop_address, null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
         }
         while (true)
         {
@@ -205,7 +205,7 @@ void BackConnectServerHandler(TcpClient client)
         sw.Start();
         NetworkStream clientstream = client.GetStream();
         sslStream = new SslStream(clientstream, true, userCertificateValidationCallback);
-        sslStream.AuthenticateAsClient("", null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
+        sslStream.AuthenticateAsClient(config.BackConnect_address, null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
         endpoint = clientstream.Socket.RemoteEndPoint.ToString();
         Console.WriteLine(String.Format("Outgoing BackConnect To: {0}", endpoint));
         while (true)
@@ -266,8 +266,13 @@ bool userCertificateValidationCallback(object sender, X509Certificate? certifica
     return true;
 }
 
-var tcplistener = new TcpListener(System.Net.IPAddress.Any, config.ListeningPort);
-tcplistener.Start();
+List<TcpListener> tcpListeners = new List<TcpListener>();
+for (int port = config.ListeningPortStart; port <= config.ListeningPortEnd; port++)
+{
+    var tcplistener = new TcpListener(System.Net.IPAddress.Any, port);
+    tcplistener.Start();
+    tcpListeners.Add(tcplistener);
+}
 if (config.nextHop_address == "127.0.0.1")
 {
     var socksServer = new Socks5.Servers.SimpleSocks5Server(new System.Net.IPEndPoint(System.Net.IPAddress.Any, config.nextHop_port));
@@ -283,19 +288,22 @@ if (config.BackConnectCapability && config.BackConnect_address == "127.0.0.1")
 
 while (true)
 {
-    if (tcplistener.Pending())
+    foreach(var tcplistener in tcpListeners)
     {
-        var client = tcplistener.AcceptTcpClient();
-        if (client.Client.RemoteEndPoint.ToString().Contains(config.nextHop_address))
+        if (tcplistener.Pending())
         {
-            backConnects.Enqueue(client);
-        }
-        else
-        {
-            new Thread(() =>
+            var client = tcplistener.AcceptTcpClient();
+            if (client.Client.RemoteEndPoint.ToString().Contains(config.nextHop_address))
             {
-                ClientHandler(client);
-            }).Start();
+                backConnects.Enqueue(client);
+            }
+            else
+            {
+                new Thread(() =>
+                {
+                    ClientHandler(client);
+                }).Start();
+            }
         }
     }
     if (backtcplistener != null && backtcplistener.Pending())

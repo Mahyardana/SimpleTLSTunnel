@@ -8,7 +8,6 @@ using SimpleTLSTunnleClient;
 using System.Security.Cryptography;
 using System.Reflection.Metadata.Ecma335;
 
-
 TTunnelClientConfig config = null;
 if (!File.Exists("config.json"))
 {
@@ -19,6 +18,7 @@ else
 {
     config = JsonConvert.DeserializeObject<TTunnelClientConfig>(File.ReadAllText("config.json"));
 }
+int currentPort = config.server_port_start;
 //var encrypted=Encrypt(Encoding.ASCII.GetBytes("fuckme"));
 //var decrypted=Decrypt(encrypted);
 //var dectext = Encoding.ASCII.GetString(decrypted);
@@ -43,10 +43,13 @@ void ClientHandler(TcpClient client)
         NetworkStream clientstream = client.GetStream();
         endpoint = clientstream.Socket.RemoteEndPoint.ToString();
         Console.WriteLine(String.Format("Incoming Connection From: {0}", endpoint));
-        NetworkStream tcptunnle = new TcpClient(config.server_address, config.server_port).GetStream();
+        NetworkStream tcptunnle = new TcpClient(config.server_address, currentPort).GetStream();
+        currentPort++;
+        if (currentPort > config.server_port_end)
+            currentPort = config.server_port_start;
         var encryptedStream = new SslStream(tcptunnle, true, userCertificateValidationCallback, userCertificateSelectionCallback);
 
-        encryptedStream.AuthenticateAsClient("", null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
+        encryptedStream.AuthenticateAsClient(config.server_address, null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
         while (true)
         {
             try

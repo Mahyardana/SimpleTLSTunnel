@@ -10,7 +10,8 @@ namespace SimpleTLSTunnleServer
     {
         public string nextHop_address = "127.0.0.1";
         public int nextHop_port = 8080;
-        public int ListeningPort = 443;
+        public int ListeningPortStart = 443;
+        public int ListeningPortEnd = 443;
         public bool BackConnectCapability = false;
         public string BackConnect_address = "127.0.0.1";
         public int BackConnectManager_port = 444;
