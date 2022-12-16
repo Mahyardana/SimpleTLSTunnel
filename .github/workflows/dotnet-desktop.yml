@@ -40,9 +40,9 @@ name: .NET Core Desktop
 
 on:
   push:
-    branches: [ "OneToOneConnection" ]
+    branches: [ GITHUB_REF_NAME ]
   pull_request:
-    branches: [ "OneToOneConnection" ]
+    branches: [ GITHUB_REF_NAME ]
 
 jobs:
 
