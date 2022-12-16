@@ -24,6 +24,83 @@ else
     config = JsonConvert.DeserializeObject<TTunnelServerConfig>(File.ReadAllText("config.json"));
 }
 
+TcpClient SocksConnect(Stream stream)
+{
+    //var stream = client.GetStream();
+    var sw = new Stopwatch();
+    sw.Start();
+    var buffer = new byte[1024];
+    while (true)
+    {
+        byte b = (byte)stream.ReadByte();
+
+        if (b == 0x05)
+        {
+            var read = stream.Read(buffer, 0, 2);
+            if (buffer[0] == 0x01 && buffer[1] == 0x00)
+            {
+                buffer[0] = 0x05;
+                buffer[1] = 0x00;
+                stream.Write(buffer, 0, 2);
+                b = (byte)stream.ReadByte();
+                if (b == 0x05)
+                {
+                    read = stream.Read(buffer, 0, 3);
+                    if (buffer[0] == 0x01 && buffer[1] == 0x00)
+                    {
+                        if (buffer[2] == 0x03)
+                        {
+                            b = (byte)stream.ReadByte();
+                            read = stream.Read(buffer, 0, b);
+                            var host = Encoding.ASCII.GetString(buffer, 0, read);
+                            read = stream.Read(buffer, 0, 2);
+                            var port = BitConverter.ToInt16(buffer.Take(2).Reverse().ToArray(), 0);
+                            var newconnection = new TcpClient();
+                            newconnection.Connect(host, port);
+                            if (newconnection.Connected)
+                            {
+                                var responsebyte = new byte[] { 0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+                                stream.Write(responsebyte, 0, responsebyte.Length);
+                                stream.Flush();
+                                return newconnection;
+                            }
+                            else
+                                return null;
+                        }
+                        else if (buffer[2] == 0x01)
+                        {
+                            read = stream.Read(buffer, 0, 4);
+                            var host = buffer[0].ToString() + "." + buffer[1].ToString() + "." + buffer[2].ToString() + "." + buffer[3].ToString();
+                            read = stream.Read(buffer, 0, 2);
+                            var port = BitConverter.ToInt16(buffer.Take(2).Reverse().ToArray(), 0);
+                            var newconnection = new TcpClient();
+                            newconnection.Connect(host, port);
+                            if (newconnection.Connected)
+                            {
+                                var responsebyte = new byte[] { 0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+                                stream.Write(responsebyte, 0, responsebyte.Length);
+                                stream.Flush();
+                                return newconnection;
+                            }
+                            else
+                                return null;
+                        }
+                        return null;
+                    }
+                }
+                return null;
+            }
+            return null;
+        }
+        Thread.Sleep(10);
+        if (sw.ElapsedMilliseconds >= 10000)
+        {
+            return null;
+        }
+    }
+    return null;
+}
+
 int connectionsRequired = 0;
 var cert = new X509Certificate("cert.pfx");
 void ClientHandler(TcpClient client)
@@ -34,7 +111,6 @@ void ClientHandler(TcpClient client)
     {
         var buffer = new List<byte>();
         var sw = new Stopwatch();
-        sw.Start();
         if (client == null)
         {
             client = new TcpClient(config.BackConnect_address, config.BackConnect_port);
@@ -47,8 +123,8 @@ void ClientHandler(TcpClient client)
         NetworkStream clientstream = client.GetStream();
         endpoint = clientstream.Socket.RemoteEndPoint.ToString();
 
-        var sslStream = new SslStream(clientstream, true, userCertificateValidationCallback);
-        sslStream.AuthenticateAsServer(cert, false, false);
+        var sslStream = new SslStream(clientstream);
+        sslStream.AuthenticateAsServer(cert);
         Console.WriteLine(String.Format("Incoming Connection From: {0}", endpoint));
 
         TcpClient nextConnection = null;
@@ -73,14 +149,18 @@ void ClientHandler(TcpClient client)
         }
         else
         {
-            nextConnection = new TcpClient(config.nextHop_address, config.nextHop_port);
+            nextConnection = SocksConnect(sslStream);
+            //nextConnection = new TcpClient(config.nextHop_address, config.nextHop_port);
+            if (nextConnection == null)
+                throw new Exception();
             hopStream = nextConnection.GetStream();
         }
         if (config.nextHop_address != "" && config.nextHop_address != "127.0.0.1")
         {
-            hopStream = new SslStream(nextConnection.GetStream(), true, userCertificateValidationCallback);
+            hopStream = new SslStream(nextConnection.GetStream());
             ((SslStream)hopStream).AuthenticateAsClient("", null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
         }
+        sw.Start();
         while (true)
         {
             try
@@ -144,7 +224,7 @@ void BackConnectHandler(TcpClient client)
         NetworkStream clientstream = client.GetStream();
         endpoint = clientstream.Socket.RemoteEndPoint.ToString();
 
-        var sslStream = new SslStream(clientstream, true, userCertificateValidationCallback);
+        var sslStream = new SslStream(clientstream);
         sslStream.AuthenticateAsServer(cert, false, false);
         Console.WriteLine(String.Format("Incoming BackConnect From: {0}", endpoint));
         while (true)
@@ -204,7 +284,7 @@ void BackConnectServerHandler(TcpClient client)
         var sw = new Stopwatch();
         sw.Start();
         NetworkStream clientstream = client.GetStream();
-        sslStream = new SslStream(clientstream, true, userCertificateValidationCallback);
+        sslStream = new SslStream(clientstream);
         sslStream.AuthenticateAsClient("", null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
         endpoint = clientstream.Socket.RemoteEndPoint.ToString();
         Console.WriteLine(String.Format("Outgoing BackConnect To: {0}", endpoint));
@@ -254,16 +334,6 @@ void BackConnectServerHandler(TcpClient client)
 
     }
     Console.WriteLine(String.Format("Outgoing BackConnect To: {0}", endpoint));
-}
-
-X509Certificate userCertificateSelectionCallback(object sender, string targetHost, X509CertificateCollection localCertificates, X509Certificate? remoteCertificate, string[] acceptableIssuers)
-{
-    return cert as X509Certificate;
-}
-
-bool userCertificateValidationCallback(object sender, X509Certificate? certificate, X509Chain? chain, SslPolicyErrors sslPolicyErrors)
-{
-    return true;
 }
 
 var tcplistener = new TcpListener(System.Net.IPAddress.Any, config.ListeningPort);

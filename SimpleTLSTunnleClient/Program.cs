@@ -44,9 +44,9 @@ void ClientHandler(TcpClient client)
         endpoint = clientstream.Socket.RemoteEndPoint.ToString();
         Console.WriteLine(String.Format("Incoming Connection From: {0}", endpoint));
         NetworkStream tcptunnle = new TcpClient(config.server_address, config.server_port).GetStream();
-        var encryptedStream = new SslStream(tcptunnle, true, userCertificateValidationCallback, userCertificateSelectionCallback);
+        var encryptedStream = new SslStream(tcptunnle,true, userCertificateValidationCallback);
 
-        encryptedStream.AuthenticateAsClient("", null, System.Security.Authentication.SslProtocols.Tls12 | System.Security.Authentication.SslProtocols.Tls13, false);
+        encryptedStream.AuthenticateAsClient(config.server_address);
         while (true)
         {
             try
