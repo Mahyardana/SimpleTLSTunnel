@@ -140,9 +140,22 @@ jobs:
         pattern: simpletlstunnel*
         merge-multiple: true
 
+    - name: delete existing release if present
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        tag="${{ github.ref_name }}"
+        release_id=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/tags/${tag}" \
+          | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null || echo "")
+        if [ -n "$release_id" ]; then
+          curl -sf -X DELETE -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/${release_id}"
+          echo "Deleted release ${release_id} for tag ${tag}"
+        fi
+
     - name: create github release
       uses: softprops/action-gh-release@v2
       with:
         files: artifacts/*.zip
         generate_release_notes: true
-        overwrite_files: true
