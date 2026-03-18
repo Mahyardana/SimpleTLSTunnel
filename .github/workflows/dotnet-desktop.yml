@@ -137,6 +137,7 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         path: artifacts
+        pattern: simpletlstunnel*
         merge-multiple: true
 
     - name: create github release
