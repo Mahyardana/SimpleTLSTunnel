@@ -145,4 +145,4 @@ jobs:
       with:
         files: artifacts/*.zip
         generate_release_notes: true
-        overwrite: true
+        overwrite_files: true
