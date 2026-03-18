@@ -52,6 +52,64 @@ Server archives follow the same naming pattern (`SimpleTLSTunnelServer-*`).
 
 Self-contained builds include the .NET runtime — no separate installation is required.
 
+### Docker (recommended for Linux servers)
+
+Images are published to the GitHub Container Registry on every release for `linux/amd64` and `linux/arm64`.
+
+```
+ghcr.io/mahyardana/simpletlstunnelserver:<version>
+ghcr.io/mahyardana/simpletlstunnelclient:<version>
+```
+
+**Run the server:**
+
+```bash
+docker run -d \
+  --name simpletlstunnelserver \
+  -p 443:443 \
+  -v /path/to/cert.pfx:/app/cert.pfx:ro \
+  -v /path/to/config.json:/app/config.json:ro \
+  ghcr.io/mahyardana/simpletlstunnelserver:latest
+```
+
+**Run the client:**
+
+```bash
+docker run -d \
+  --name simpletlstunnelclient \
+  -p 127.0.0.1:1080:1080 \
+  -v /path/to/cert.crt:/app/cert.crt:ro \
+  -v /path/to/config.json:/app/config.json:ro \
+  ghcr.io/mahyardana/simpletlstunnelclient:latest
+```
+
+**Docker Compose example (single-hop):**
+
+```yaml
+services:
+  server:
+    image: ghcr.io/mahyardana/simpletlstunnelserver:latest
+    ports:
+      - "443:443"
+    volumes:
+      - ./cert.pfx:/app/cert.pfx:ro
+      - ./server-config.json:/app/config.json:ro
+    restart: unless-stopped
+
+  client:
+    image: ghcr.io/mahyardana/simpletlstunnelclient:latest
+    ports:
+      - "127.0.0.1:1080:1080"
+    volumes:
+      - ./cert.crt:/app/cert.crt:ro
+      - ./client-config.json:/app/config.json:ro
+    restart: unless-stopped
+```
+
+Mount your `cert.pfx` / `cert.crt` and `config.json` as read-only volumes — the container working directory is `/app`.
+
+---
+
 ### Build from source
 
 ```bash
